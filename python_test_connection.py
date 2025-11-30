@@ -6,7 +6,7 @@ try:
     url = URL.create(
         "mysql+mysqlconnector",
         username="root",
-        password="Wang2134",
+        password="changepass",
         host="127.0.0.1",
         port=3306,
         database="Homebase"
@@ -23,4 +23,5 @@ try:
         print(f"✓ Found {count} users in the database")
         
 except Exception as e:
+
     print(f"✗ Connection failed: {e}")
