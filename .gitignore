@@ -6,6 +6,12 @@ __pycache__/
 # C extensions
 *.so
 
+# Ignore Everything
+* 
+
+# Exceptions:
+!dashboard.py
+
 # Distribution / packaging
 .Python
 build/
