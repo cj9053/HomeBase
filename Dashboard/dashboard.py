@@ -102,6 +102,9 @@ st.markdown("""
     .transaction-row:hover {
         background-color: #f8f9fa;
     }
+    .t-category { color: #aaa; font-size: 0.9em; font-style: italic; }
+    .t-date { color: #666; font-size: 0.8em; display: block; }
+
     
     /* Bill status badges */
     .status-pending {
@@ -520,20 +523,40 @@ with trans_col:
     st.markdown('<p class="section-title">Recent Transactions</p>', unsafe_allow_html=True)
     # Increase days to 365 to get more historical transactions
     transactions_df = get_recent_transactions(household_info['household_id'], days=365)
+    with st.expander("Recent Transactions", expanded=False):
+        if not transactions_df.empty:
+            for index, row in transactions_df.iterrows():
+                # Build your HTML string using f-strings
+                html_row = f"""
+                <div class="transaction-row">
+                    <div>
+                        <strong>{row['notes']}</strong>
+                        <span class="t-date">by {row['username']} - {row['created_at']}</span>
+                    </div>
+                    <div style="text-align: right;">
+                        <strong>${row['amount']:.2f}</strong>
+                        <br>
+                        <span class="t-category">{row['category']}</span>
+                    </div>
+                </div>
+                """
+                st.markdown(html_row, unsafe_allow_html=True)
+        else:
+            st.info("No recent transactions found.")
     
-    if not transactions_df.empty:
-        for idx, row in transactions_df.iterrows():
-            col1, col2, col3 = st.columns([3, 6, 3])
-            with col1:
-                st.write(f"**${row['amount']:.2f}**")
-            with col2:
-                st.write(f"{row['notes'] or row['category']}")
-                st.caption(f"by {row['username']} - {row['created_at'].strftime('%b %d, %Y')}")
-            with col3:
-                st.write(f"_{row['category']}_")
-            st.markdown("---")
-    else:
-        st.info("No recent transactions found")
+    # if not transactions_df.empty:
+    #     for idx, row in transactions_df.iterrows():
+    #         col1, col2, col3 = st.columns([3, 6, 3])
+    #         with col1:
+    #             st.write(f"**${row['amount']:.2f}**")
+    #         with col2:
+    #             st.write(f"{row['notes'] or row['category']}")
+    #             st.caption(f"by {row['username']} - {row['created_at'].strftime('%b %d, %Y')}")
+    #         with col3:
+    #             st.write(f"_{row['category']}_")
+    #         st.markdown("---")
+    # else:
+    #     st.info("No recent transactions found")
 
 with bills_col:
     st.markdown('<p class="section-title">Upcoming Bills</p>', unsafe_allow_html=True)
