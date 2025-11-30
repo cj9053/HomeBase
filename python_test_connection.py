@@ -6,7 +6,7 @@ try:
     url = URL.create(
         "mysql+mysqlconnector",
         username="root",
-        password="changepass",
+        password="Wang2134",
         host="127.0.0.1",
         port=3306,
         database="Homebase"

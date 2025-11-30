@@ -190,6 +190,101 @@ def get_all_users():
         return df
     return pd.DataFrame()
 
+#check and uddate  Bill start CJ
+def check_and_update_overdue_bills(household_id):
+    """
+    Run this BEFORE fetching bills. 
+    It finds any 'pending' bills with a passed due date and marks them 'overdue'.
+    """
+    conn = get_database_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # SQL to bulk update any bill that is pending and past today
+            query = """
+                UPDATE Bills 
+                SET status = 'overdue' 
+                WHERE household_id = %s 
+                AND status = 'pending' 
+                AND due_date < CURRENT_DATE
+            """
+
+            cursor.execute(query, (int(household_id),))
+            conn.commit()
+            cursor.close()
+
+        except Exception as e:
+            st.error(f"Error updating overdue bills: {e}")
+
+
+def mark_bill_as_paid(bill_id):
+    """Updates a specific bill status to 'paid'"""
+    conn = get_database_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            query = "UPDATE Bills SET status = 'paid' WHERE bill_id = %s"
+            cursor.execute(query, (bill_id,))
+            conn.commit()
+            cursor.close()
+            return True
+        except Exception as e:
+            st.error(f"Error updating bill: {e}")
+            return False
+    return False
+
+@st.dialog("Manage Bill")
+def open_bill_action(bill_id, bill_name, amount):
+    st.write(f"**{bill_name}**")
+    st.write(f"Amount: ${amount:.2f}")
+    
+    st.markdown("---")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Mark as Paid", use_container_width=True, type="primary"):
+            success = mark_bill_as_paid(bill_id)
+            if success:
+                st.success("Bill paid")
+                get_upcoming_bills.clear() # Clear cache so it vanishes from list
+                st.rerun()
+                
+    with col2:
+        # if st.button("Delete Bill", use_container_width=True):
+        #     delete_bill(bill_id)
+        #     pass
+        if st.button("Delete Bill", use_container_width=True):
+            st.session_state[f"confirm_delete_{bill_id}"] = True
+            
+        if st.session_state.get(f"confirm_delete_{bill_id}", False):
+            st.warning("Are you sure?")
+            if st.button("Yes, Delete Permanently", type="primary", use_container_width=True):
+                success = delete_bill(bill_id)
+                if success:
+                    st.success("Bill deleted.")
+                    get_upcoming_bills.clear() 
+                    st.rerun()
+
+
+def delete_bill(bill_id):
+    conn = get_database_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            query = "DELETE FROM Bills WHERE bill_id = %s"
+            cursor.execute(query, (bill_id,))
+            conn.commit()
+            cursor.close()
+            return True
+        except Exception as e:
+            st.error(f"Error deleting bill: {e}")
+            return False
+    return False
+
+#check and update bill stats End CJ
+
+
+
 @st.cache_data(ttl=60)
 def get_recent_transactions(household_id, days=365):
     """Get recent transactions for household"""
@@ -396,6 +491,31 @@ with col_header_left:
     st.markdown(f'<p class="welcome-text">Welcome back, {user_info["username"]}</p>', unsafe_allow_html=True)
     st.markdown(f'<h1 class="homebase-name">{household_info["name"]}</h1>', unsafe_allow_html=True)
 
+# UI create bill CJ
+@st.dialog("Add New Bill")
+def show_add_bill_form(household_id):
+    with st.form("bill_creation_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            name = st.text_input("Bill Name", placeholder="e.g. Internet, Rent")
+        with col2:
+            amount = st.number_input("Amount ($)", min_value=0.0, step=0.01)
+            
+        due_date = st.date_input("Due Date")
+        
+        submitted = st.form_submit_button("Create Bill", use_container_width=True)
+        
+        if submitted:
+            if name and amount > 0:
+                success = create_bill(household_id, name, amount, due_date)
+                if success:
+                    get_upcoming_bills.clear()
+                    st.success("Bill created successfully!")
+                    st.rerun() # Refresh app to show new bill in dashboard
+            else:
+                st.warning("Please enter a valid name and amount.")
+
+
 with col_header_right:
     if st.button("☰ Menu", key="menu_toggle", use_container_width=True):
         toggle_menu()
@@ -403,17 +523,53 @@ with col_header_right:
     # Side menu (when toggled)
     if st.session_state.show_menu:
         with st.container():
+
+
+            # st.markdown("""
+            #     <div style="background-color: #262730; padding: 15px; border-radius: 10px; border: 1px solid #464b5c; margin-top: 10px;">
+            # """, unsafe_allow_html=True)
+
+            
             st.markdown("---")
             st.write(f"**Account Details**")
             st.write(f"Username: {user_info['username']}")
             st.write(f"Email: {user_info['email']}")
             st.write(f"Role: {household_info['role']}")
             st.markdown("---")
+            #create new bill Button CJ
+            if st.button("➕ Create New Bill", use_container_width=True, type="primary"):
+                 show_add_bill_form(household_info['household_id'])
+
+            st.markdown("---")
             if st.button("🚪 Sign Out", use_container_width=True):
                 st.session_state.clear()
                 st.rerun()
 
 st.markdown("<br>", unsafe_allow_html=True)
+
+# create Bill Func CJ
+def create_bill(household_id, name, amount, due_date):
+    """Insert a new bill into the database"""
+    household_id = int(household_id)  
+    amount = float(amount)            
+    conn = get_database_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            query = """
+                INSERT INTO Bills (household_id, name, amount, due_date, status)
+                VALUES (%s, %s, %s, %s, 'pending')
+            """
+            cursor.execute(query, (household_id, name, amount, due_date))
+            conn.commit()
+            cursor.close()
+            # conn.close()
+            return True
+        except Exception as e:
+            st.error(f"Error creating bill: {e}")
+            return False
+    return False
+
 
 # Time period selector for charts
 col_title, col_period = st.columns([9, 3])
@@ -558,6 +714,9 @@ with trans_col:
     # else:
     #     st.info("No recent transactions found")
 
+check_and_update_overdue_bills(household_info['household_id'])
+bills_df = get_upcoming_bills(household_info['household_id'])
+#latest changes here CJ
 with bills_col:
     st.markdown('<p class="section-title">Upcoming Bills</p>', unsafe_allow_html=True)
     bills_df = get_upcoming_bills(household_info['household_id'])
@@ -566,13 +725,26 @@ with bills_col:
         for idx, row in bills_df.iterrows():
             col1, col2, col3 = st.columns([4, 4, 4])
             with col1:
-                st.write(f"**{row['name']}**")
+                # st.write(f"**{row['name']}**")
+                if st.button(f"🧾 {row['name']}", key=f"bill_btn_{row['bill_id']}", use_container_width=True):
+                    open_bill_action(row['bill_id'], row['name'], row['amount'])
             with col2:
-                st.write(f"**${row['amount']:.2f}**")
+                # st.write(f"**${row['amount']:.2f}**")
+                st.markdown(f"<div style='padding-top: 10px;'><b>${row['amount']:.2f}</b></div>", unsafe_allow_html=True)
             with col3:
+            #     status_class = f"status-{row['status']}"
+            #     st.markdown(f'<span class="{status_class}">{row["status"].upper()}</span>', unsafe_allow_html=True)
+            # st.caption(f"Due: {row['due_date'].strftime('%b %d, %Y')}")
                 status_class = f"status-{row['status']}"
-                st.markdown(f'<span class="{status_class}">{row["status"].upper()}</span>', unsafe_allow_html=True)
-            st.caption(f"Due: {row['due_date'].strftime('%b %d, %Y')}")
+                st.markdown(f"""
+                <div style='padding-top: 5px; text-align: right;'>
+                    <span class="{status_class}">{row["status"].upper()}</span>
+                    <br>
+                    <span style='font-size: 0.8em; color: #666;'>{row['due_date'].strftime('%b %d')}</span>
+                </div>
+                """, unsafe_allow_html=True)
+                
+
             st.markdown("---")
     else:
         st.info("No upcoming bills found")
