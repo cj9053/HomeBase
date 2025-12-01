@@ -1,10 +1,14 @@
+from streamlit_extras.stylable_container import stylable_container as sc
 import streamlit as st
+
 import mysql.connector
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 from decimal import Decimal
+
+
 
 # Page configuration
 st.set_page_config(
@@ -17,6 +21,18 @@ st.set_page_config(
 # Custom CSS for 12-point grid and styling
 st.markdown("""
 <style>
+    .stButton button {
+        background-color: Orange;
+        font-weight: bold;
+        border: 2px solid black;
+    }
+
+    .stButton button:hover {
+        background-color:transparent;
+        color: black;
+        border: 2px solid black;
+    }
+            
     /* 12-point grid system */
     .main .block-container {
         padding-top: 2rem;
@@ -99,11 +115,11 @@ st.markdown("""
         align-items: center;
     }
     
-    .transaction-row:hover {
-        background-color: #f8f9fa;
-    }
-    .t-category { color: #aaa; font-size: 0.9em; font-style: italic; }
-    .t-date { color: #666; font-size: 0.8em; display: block; }
+    # .transaction-row:hover {
+    #     background-color: #f8f9fa;
+    # }
+    # .t-category { color: #aaa; font-size: 0.9em; font-style: italic; }
+    # .t-date { color: #666; font-size: 0.8em; display: block; }
 
     
     /* Bill status badges */
@@ -120,6 +136,8 @@ st.markdown("""
     .status-overdue {
         color: #f44336;
         font-weight: 600;
+    }
+  
     }
 </style>
 """, unsafe_allow_html=True)
@@ -192,10 +210,7 @@ def get_all_users():
 
 #check and uddate  Bill start CJ
 def check_and_update_overdue_bills(household_id):
-    """
-    Run this BEFORE fetching bills. 
-    It finds any 'pending' bills with a passed due date and marks them 'overdue'.
-    """
+  
     conn = get_database_connection()
     if conn:
         try:
@@ -218,7 +233,7 @@ def check_and_update_overdue_bills(household_id):
 
 
 def mark_bill_as_paid(bill_id):
-    """Updates a specific bill status to 'paid'"""
+
     conn = get_database_connection()
     if conn:
         try:
@@ -233,8 +248,12 @@ def mark_bill_as_paid(bill_id):
             return False
     return False
 
+
+
+
 @st.dialog("Manage Bill")
 def open_bill_action(bill_id, bill_name, amount):
+
     st.write(f"**{bill_name}**")
     st.write(f"Amount: ${amount:.2f}")
     
@@ -242,28 +261,30 @@ def open_bill_action(bill_id, bill_name, amount):
     
     col1, col2 = st.columns(2)
     with col1:
+
         if st.button("Mark as Paid", use_container_width=True, type="primary"):
             success = mark_bill_as_paid(bill_id)
             if success:
                 st.success("Bill paid")
                 get_upcoming_bills.clear() # Clear cache so it vanishes from list
                 st.rerun()
-                
+
+
     with col2:
-        # if st.button("Delete Bill", use_container_width=True):
-        #     delete_bill(bill_id)
-        #     pass
-        if st.button("Delete Bill", use_container_width=True):
+
+        if st.button("Delete Bill", use_container_width=True, type="secondary"):
             st.session_state[f"confirm_delete_{bill_id}"] = True
-            
+
+
         if st.session_state.get(f"confirm_delete_{bill_id}", False):
-            st.warning("Are you sure?")
-            if st.button("Yes, Delete Permanently", type="primary", use_container_width=True):
-                success = delete_bill(bill_id)
-                if success:
-                    st.success("Bill deleted.")
-                    get_upcoming_bills.clear() 
-                    st.rerun()
+            if st.session_state.get(f"confirm_delete_{bill_id}", False):
+                st.warning("Are you sure?")
+                if st.button("Yes, Delete Permanently", type="primary", use_container_width=True):
+                    success = delete_bill(bill_id)
+                    if success:
+                        st.success("Bill deleted.")
+                        get_upcoming_bills.clear() 
+                        st.rerun()
 
 
 def delete_bill(bill_id):
@@ -287,8 +308,8 @@ def delete_bill(bill_id):
 
 @st.cache_data(ttl=60)
 def get_recent_transactions(household_id, days=365):
-    """Get recent transactions for household"""
-    # Convert numpy integers to native Python integers to avoid SQL conversion errors
+
+
     household_id = int(household_id)
     days = int(days)
     
@@ -537,7 +558,7 @@ with col_header_right:
             st.write(f"Role: {household_info['role']}")
             st.markdown("---")
             #create new bill Button CJ
-            if st.button("➕ Create New Bill", use_container_width=True, type="primary"):
+            if st.button("➕ Create New Bill", use_container_width=True, ):
                  show_add_bill_form(household_info['household_id'])
 
             st.markdown("---")
@@ -699,7 +720,7 @@ with trans_col:
                 st.markdown(html_row, unsafe_allow_html=True)
         else:
             st.info("No recent transactions found.")
-    
+
     # if not transactions_df.empty:
     #     for idx, row in transactions_df.iterrows():
     #         col1, col2, col3 = st.columns([3, 6, 3])
@@ -716,38 +737,39 @@ with trans_col:
 
 check_and_update_overdue_bills(household_info['household_id'])
 bills_df = get_upcoming_bills(household_info['household_id'])
-#latest changes here CJ
+
 with bills_col:
     st.markdown('<p class="section-title">Upcoming Bills</p>', unsafe_allow_html=True)
     bills_df = get_upcoming_bills(household_info['household_id'])
-    
-    if not bills_df.empty:
-        for idx, row in bills_df.iterrows():
-            col1, col2, col3 = st.columns([4, 4, 4])
-            with col1:
-                # st.write(f"**{row['name']}**")
-                if st.button(f"🧾 {row['name']}", key=f"bill_btn_{row['bill_id']}", use_container_width=True):
-                    open_bill_action(row['bill_id'], row['name'], row['amount'])
-            with col2:
-                # st.write(f"**${row['amount']:.2f}**")
-                st.markdown(f"<div style='padding-top: 10px;'><b>${row['amount']:.2f}</b></div>", unsafe_allow_html=True)
-            with col3:
-            #     status_class = f"status-{row['status']}"
-            #     st.markdown(f'<span class="{status_class}">{row["status"].upper()}</span>', unsafe_allow_html=True)
-            # st.caption(f"Due: {row['due_date'].strftime('%b %d, %Y')}")
-                status_class = f"status-{row['status']}"
-                st.markdown(f"""
-                <div style='padding-top: 5px; text-align: right;'>
-                    <span class="{status_class}">{row["status"].upper()}</span>
-                    <br>
-                    <span style='font-size: 0.8em; color: #666;'>{row['due_date'].strftime('%b %d')}</span>
-                </div>
-                """, unsafe_allow_html=True)
-                
+    with st.expander("Upcoming Transactions", expanded=False):
+        if not bills_df.empty:
+            for idx, row in bills_df.iterrows():
+                st.markdown(f'<div class="bill-list-row">', unsafe_allow_html=True)
+                col1, col2, col3 = st.columns([4, 4, 4])
+                with col1:
+                    # st.write(f"**{row['name']}**")
+                    if st.button(f"🧾 {row['name']}", key=f"bill_btn_{row['bill_id']}", use_container_width=True):
+                        open_bill_action(row['bill_id'], row['name'], row['amount'])
+                with col2:
+                    # st.write(f"**${row['amount']:.2f}**")
+                    st.markdown(f"<div style='padding-top: 10px;'><b>${row['amount']:.2f}</b></div>", unsafe_allow_html=True)
+                with col3:
+                #     status_class = f"status-{row['status']}"
+                #     st.markdown(f'<span class="{status_class}">{row["status"].upper()}</span>', unsafe_allow_html=True)
+                # st.caption(f"Due: {row['due_date'].strftime('%b %d, %Y')}")
+                    status_class = f"status-{row['status']}"
+                    st.markdown(f"""
+                    <div style='padding-top: 5px; text-align: right;'>
+                        <span class="{status_class}">{row["status"].upper()}</span>
+                        <br>
+                        <span style='font-size: 0.8em; color: #666;'>{row['due_date'].strftime('%b %d')}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
 
-            st.markdown("---")
-    else:
-        st.info("No upcoming bills found")
+            st.markdown('</div>', unsafe_allow_html=True) # Close bill-list-row wrapper
+        else:
+            st.info("No upcoming bills found")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
