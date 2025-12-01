@@ -20,27 +20,27 @@ st.set_page_config(
 
 # Custom CSS for 12-point grid and styling
 st.markdown("""
-<style>
+    <style>
    #account-header-container {
-    display: flex;             /* Enables Flexbox layout */
-    align-items: center;       /* CRITICAL: Vertically aligns the heading and button */
-    gap: 15px;                 /* Adds horizontal spacing between the two elements */
+    display: flex;             
+    align-items: center;       
+    gap: 15px;                 
     width: 100%;               
     margin-bottom: 5px;        
-}
+    }
 
-/* 🎯 2. Remove default margins from the heading and button wrapper */
-#account-header-container h3, #edit-button-wrapper {
-    margin: 0;
-    padding: 0;
-}
 
-/* 🎯 3. CRITICAL: Remove margin/padding from the Streamlit-generated div inside the wrapper */
-/* This targets the inner container that usually causes vertical misalignment */
-#edit-button-wrapper > div {
-    margin: 0 !important;
-    padding: 0 !important;
-}
+    #account-header-container h3, #edit-button-wrapper {
+        margin: 0;
+        padding: 0;
+    }
+
+
+
+    #edit-button-wrapper > div {
+        margin: 0 !important;
+        padding: 0 !important;
+    }
     div[data-testid="stExpander"] {
         border: 1px solid #ddd;
         border-radius: 8px; 
@@ -513,14 +513,60 @@ def delete_savings_goal(goal_id, household_id):
     return False
 
 
+def update_user_name(new_username):
+    user_id_to_update = st.session_state.get('user_id') # Use .get for safety
+    if not user_id_to_update:
+        st.error("Error: User ID not found in session state.")
+        print("Error: User ID not found in session state.")
+        return False
+        
+    conn = get_database_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            user_id_int = int(user_id_to_update)
+            query = "UPDATE Users SET username = %s WHERE user_id = %s" 
+            cursor.execute(query, (new_username, user_id_int))
+            conn.commit()
+            cursor.close()
+            
+            # Update the session state here, so the new username persists 
+            # and is available on the next run.
+            st.session_state.user_info['username'] = new_username
+            
+
+            get_user_info.clear()
+            get_spending_data.clear()
+            return True 
+        except Exception as e:
+            st.error(f"Error updating user: {e}")
+            print(f"Error updating user: {e}")
+            return False
+    return False
+
+
+
 # Initialize session state
 if 'user_id' not in st.session_state:
     st.session_state.user_id = 1  # Default user for demo
+if 'user_info' not in st.session_state:
+    user_info = get_user_info(st.session_state.user_id)
+    # 🚨 Replace this with a function call to fetch actual user data from the DB 
+    # based on st.session_state.user_id
+    st.session_state.user_info = {
+        'username': user_info['username'], 
+        'email': user_info['email'],
+        'user_id': st.session_state.user_id
+    }
 if 'show_menu' not in st.session_state:
     st.session_state.show_menu = False
 if 'show_master_view' not in st.session_state:
     st.session_state.show_master_view = False
+if 'show_edit_form' not in st.session_state:
+    st.session_state.show_edit_form = False
 
+user_info = st.session_state.get('user_info', None) 
+household_info = st.session_state.get('household_info', None)
 # Toggle menu function
 def toggle_menu():
     st.session_state.show_menu = not st.session_state.show_menu
@@ -574,7 +620,7 @@ else:
     st.session_state.show_master_view = False
 
 # Get user and household data
-user_info = get_user_info(st.session_state.user_id)
+# user_info = get_user_info(st.session_state.user_id)
 household_info = get_household_info(st.session_state.user_id)
 
 if user_info is None or household_info is None:
@@ -585,6 +631,7 @@ if user_info is None or household_info is None:
 col_header_left, col_header_right = st.columns([9, 3])
 
 with col_header_left:
+
     st.markdown(f'<p class="welcome-text">Welcome back, {user_info["username"]}</p>', unsafe_allow_html=True)
     st.markdown(f'<h1 class="homebase-name">{household_info["name"]}</h1>', unsafe_allow_html=True)
 
@@ -620,19 +667,14 @@ with col_header_right:
     # Side menu (when toggled)
     if st.session_state.show_menu:
         with st.container():
+            current_user_info = st.session_state.get('user_info', {})
+            current_household_info = st.session_state.get('household_info', {})
 
-
-            # st.markdown("""
-            #     <div style="background-color: #262730; padding: 15px; border-radius: 10px; border: 1px solid #464b5c; margin-top: 10px;">
-            # """, unsafe_allow_html=True)
+            
 
             col1, col2 = st.columns([3, 1])
-            # st.markdown("---")
 
 
-
-
-            # st.write(f"**Account Details**")
             with col1:
     
                 st.markdown("""
@@ -646,9 +688,9 @@ with col_header_right:
                     st.session_state.show_edit_form = True # Example of using session state
 
            
-            st.write(f"Username: {user_info['username']}")
-            st.write(f"Email: {user_info['email']}")
-            st.write(f"Role: {household_info['role']}")
+            st.write(f"Username: {current_user_info.get('username', 'N/A')}")
+            st.write(f"Email: {current_user_info.get('email', 'N/A')}")
+            st.write(f"Role: {current_household_info.get('role', 'N/A')}")
             st.markdown("---")
             #create new bill Button CJ
             if st.button("➕ Create New Bill", use_container_width=True, ):
@@ -658,6 +700,65 @@ with col_header_right:
             if st.button("🚪 Sign Out", use_container_width=True):
                 st.session_state.clear()
                 st.rerun()
+
+            if st.session_state.show_edit_form:
+                st.markdown("<br>", unsafe_allow_html=True) # Add spacing
+                st.subheader("📝 Edit User Information")
+
+            # Use st.form to group inputs and handle submission cleanly
+                with st.form("edit_user_form", clear_on_submit=False):
+                
+                # Username Input
+                    new_username = st.text_input(
+                        "New Username", 
+                        value=current_user_info['username'], # Pre-fill with current value
+                    )
+                    
+                    # Password Input (Masked)
+                    new_password = st.text_input(
+                        "New Password", 
+                        type="password", # Important for hiding input
+                    )
+                    
+                    # Save and Cancel Buttons
+                    col_save, col_cancel = st.columns(2)
+                
+                    with col_save:
+                        save_submitted = st.form_submit_button("Save Changes")
+                    if save_submitted:
+                        print('save submit click')
+                        username_changed = new_username != st.session_state.user_info['username']
+                        if username_changed:
+                            if update_user_name(new_username):
+                                st.success(f"Username successfully updated to **{new_username}**.")
+                                print((f"Username successfully updated to **{new_username}**."))
+                            else:
+                                st.error("Failed to update username in the database.")
+                    
+                    # 2. Update Password Logic
+                        password_changed = bool(new_password)
+                        if password_changed:
+                            # **Call your backend/DB function to hash and update password here**
+                            st.success("Password successfully updated.")
+                        
+                    # 3. Hide the form and Rerun if any changes occurred
+                        if username_changed or password_changed:
+                            st.session_state.show_edit_form = False
+                            st.rerun() # Essential to reflect changes and hide form
+                        
+                    # with col_cancel:
+                    #     cancel_btn = st.button("Cancel", key="cancel_edit_btn")
+                    #     if cancel_btn:
+
+                    #         st.session_state.show_edit_form = False
+                    #         st.rerun() # Rerun to immediately hide the form
+                cancel_btn = st.button("Cancel", key="cancel_edit_btn_outside")
+                if cancel_btn:
+                    st.session_state.show_edit_form = False
+                    st.rerun() # Rerun to immediately hide the form
+        
+                        
+            
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -684,7 +785,7 @@ def create_bill(household_id, name, amount, due_date):
             return False
     return False
 
-
+  
 # Time period selector for charts
 col_title, col_period = st.columns([9, 3])
 with col_title:
