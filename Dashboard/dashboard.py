@@ -21,6 +21,48 @@ st.set_page_config(
 # Custom CSS for 12-point grid and styling
 st.markdown("""
 <style>
+   #account-header-container {
+    display: flex;             /* Enables Flexbox layout */
+    align-items: center;       /* CRITICAL: Vertically aligns the heading and button */
+    gap: 15px;                 /* Adds horizontal spacing between the two elements */
+    width: 100%;               
+    margin-bottom: 5px;        
+}
+
+/* 🎯 2. Remove default margins from the heading and button wrapper */
+#account-header-container h3, #edit-button-wrapper {
+    margin: 0;
+    padding: 0;
+}
+
+/* 🎯 3. CRITICAL: Remove margin/padding from the Streamlit-generated div inside the wrapper */
+/* This targets the inner container that usually causes vertical misalignment */
+#edit-button-wrapper > div {
+    margin: 0 !important;
+    padding: 0 !important;
+}
+    div[data-testid="stExpander"] {
+        border: 1px solid #ddd;
+        border-radius: 8px; 
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05); 
+        background-color: white; 
+    }
+
+
+    div[data-testid="stExpander"] summary p {
+        color: #1f1f1f !important; 
+        font-weight: 600;
+    }
+    div[data-testid="stExpander"] summary p:hover {
+        color: #1f1f1f !important; 
+        font-weight: 600;
+    }
+
+   
+   
+   .stExpanderToggleIcon: hover{
+        color: black;        
+    }
     .stButton button {
         background-color: Orange;
         font-weight: bold;
@@ -78,6 +120,20 @@ st.markdown("""
         margin-bottom: 1rem;
         color: #1f1f1f;
     }
+    .section-title:hover {
+        background-color:transparent;
+        color: black;
+        border: transparent;
+    }
+    .streamlit-expanderHeader {
+        background-color: white;
+        color: black; 
+            
+    }
+     .streamlit-expanderHeader:Hover {
+        background-color: transparent;
+        color: black; 
+    }
     
     /* Card styling */
     .metric-card {
@@ -115,11 +171,11 @@ st.markdown("""
         align-items: center;
     }
     
-    # .transaction-row:hover {
-    #     background-color: #f8f9fa;
-    # }
-    # .t-category { color: #aaa; font-size: 0.9em; font-style: italic; }
-    # .t-date { color: #666; font-size: 0.8em; display: block; }
+    .transaction-row:hover {
+        background-color: #f8f9fa;
+    }
+    .t-category { color: #aaa; font-size: 0.9em; font-style: italic; }
+    .t-date { color: #666; font-size: 0.8em; display: block; }
 
     
     /* Bill status badges */
@@ -138,7 +194,7 @@ st.markdown("""
         font-weight: 600;
     }
   
-    }
+    
 </style>
 """, unsafe_allow_html=True)
 
@@ -172,6 +228,8 @@ def get_user_info(user_id):
         df = pd.read_sql(query, conn, params=(user_id,))
         return df.iloc[0] if not df.empty else None
     return None
+
+
 
 @st.cache_data(ttl=300)
 def get_household_info(user_id):
@@ -550,9 +608,26 @@ with col_header_right:
             #     <div style="background-color: #262730; padding: 15px; border-radius: 10px; border: 1px solid #464b5c; margin-top: 10px;">
             # """, unsafe_allow_html=True)
 
-            
-            st.markdown("---")
-            st.write(f"**Account Details**")
+            col1, col2 = st.columns([3, 1])
+            # st.markdown("---")
+
+
+
+
+            # st.write(f"**Account Details**")
+            with col1:
+    
+                st.markdown("""
+                    <h3 class="account-header-container">Account Details</h3>
+                """, unsafe_allow_html=True)
+
+            with col2:
+               
+                if st.button("Edit", key="edit_account_btn"):
+                    # Put the code that handles editing here
+                    st.session_state.show_edit_form = True # Example of using session state
+
+           
             st.write(f"Username: {user_info['username']}")
             st.write(f"Email: {user_info['email']}")
             st.write(f"Role: {household_info['role']}")
@@ -700,7 +775,7 @@ with trans_col:
     st.markdown('<p class="section-title">Recent Transactions</p>', unsafe_allow_html=True)
     # Increase days to 365 to get more historical transactions
     transactions_df = get_recent_transactions(household_info['household_id'], days=365)
-    with st.expander("Recent Transactions", expanded=False):
+    with st.expander("Recent Transactions", expanded=False,):
         if not transactions_df.empty:
             for index, row in transactions_df.iterrows():
                 # Build your HTML string using f-strings
