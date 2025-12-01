@@ -7,11 +7,12 @@ __pycache__/
 *.so
 
 # Ignore Everything
-**/secrets.toml
+homeBase/dashboard/.streamlit/secrets.toml
 **/python_test_connection.py
 
 # Exceptions:
 !dashboard.py
+
 
 # Distribution / packaging
 .Python

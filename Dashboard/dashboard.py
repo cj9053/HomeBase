@@ -551,13 +551,24 @@ if 'user_id' not in st.session_state:
     st.session_state.user_id = 1  # Default user for demo
 if 'user_info' not in st.session_state:
     user_info = get_user_info(st.session_state.user_id)
-    # 🚨 Replace this with a function call to fetch actual user data from the DB 
-    # based on st.session_state.user_id
     st.session_state.user_info = {
         'username': user_info['username'], 
         'email': user_info['email'],
         'user_id': st.session_state.user_id
     }
+if 'household_info' not in st.session_state:
+    household_data = get_household_info(st.session_state.user_id)
+    
+    if household_data is not None:
+        st.session_state.household_info = {
+            'household_id': household_data['household_id'], 
+            'name': household_data['name'],
+            # 🔥 CRUCIAL FIX: Ensure the 'role' is included here
+            'role': household_data['role'] 
+        }
+    else:
+        # Handle case where household data is not found
+        st.session_state.household_info = {'role': 'N/A', 'name': 'N/A', 'household_id': None}
 if 'show_menu' not in st.session_state:
     st.session_state.show_menu = False
 if 'show_master_view' not in st.session_state:
@@ -620,8 +631,9 @@ else:
     st.session_state.show_master_view = False
 
 # Get user and household data
-# user_info = get_user_info(st.session_state.user_id)
-household_info = get_household_info(st.session_state.user_id)
+
+# household_info = get_household_info(st.session_state.user_id)
+household_info = st.session_state.get('household_info', {})
 
 if user_info is None or household_info is None:
     st.error("Unable to load user or household information. Please check your database connection.")
