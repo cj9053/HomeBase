@@ -495,6 +495,24 @@ def get_savings_goals(household_id):
         return df
     return pd.DataFrame()
 
+## added a delete option (Snaha)
+def delete_savings_goal(goal_id, household_id):
+    """Delete a savings goal"""
+    conn = get_database_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            query = "DELETE FROM SavingsGoals WHERE goal_id = %s AND household_id = %s"
+            cursor.execute(query, (int(goal_id), int(household_id)))
+            conn.commit()
+            cursor.close()
+            return True
+        except Exception as e:
+            st.error(f"Error deleting savings goal: {e}")
+            return False
+    return False
+
+
 # Initialize session state
 if 'user_id' not in st.session_state:
     st.session_state.user_id = 1  # Default user for demo
@@ -678,6 +696,16 @@ with col_period:
         index=1,
         label_visibility="collapsed"
     )
+ # spending toggle feature Snaha begins
+    view_mode = st.radio(
+        "Spending view",
+        options=["My spending", "Household spending"],
+        index=1,
+        horizontal=True,
+        label_visibility="collapsed"
+    )
+    # spending toggle feature Snaha ends
+
 
 # Map period to days
 period_days_map = {
@@ -848,18 +876,21 @@ with bills_col:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Savings Goals Section
+
+
+#create savings goals feature Snaha begins
+
 st.markdown('<p class="section-title">Savings Goals</p>', unsafe_allow_html=True)
 goals_df = get_savings_goals(household_info['household_id'])
 
 if not goals_df.empty:
-    # Display goals in 3 columns
     goals_cols = st.columns(3)
     
     for idx, row in goals_df.iterrows():
         col_idx = idx % 3
         with goals_cols[col_idx]:
             with st.container():
+                goal_id = int(row["goal_id"])
                 st.markdown(f"**{row['name']}**")
                 
                 current = float(row['current_amount'])
@@ -875,6 +906,60 @@ if not goals_df.empty:
                     st.metric("Target", f"${target:,.2f}")
                 
                 st.caption(f"{progress_pct:.1f}% Complete")
+
+                delete_clicked = st.button(
+                    "Delete goal",
+                    key=f"delete_goal_{goal_id}"
+                )
+                if delete_clicked:
+                    success = delete_savings_goal(goal_id, household_info["household_id"])
+                    if success:
+                        st.success("Savings goal deleted.")
+                        get_savings_goals.clear()
+                        st.rerun()
+
                 st.markdown("<br>", unsafe_allow_html=True)
 else:
     st.info("No savings goals set for this household")
+
+st.markdown("---")
+st.markdown("### Create a new savings goal")
+
+with st.form("create_savings_goal"):
+    new_goal_name = st.text_input("Goal name")
+    new_target_amount = st.number_input(
+        "Target amount ($)",
+        min_value=0.0,
+        step=10.0,
+        format="%.2f",
+    )
+
+    create_submitted = st.form_submit_button("Create goal")
+
+if create_submitted:
+    if not new_goal_name or new_target_amount <= 0:
+        st.error("Please enter a goal name and a positive target amount.")
+    else:
+        conn = get_database_connection()
+        if conn is None:
+            st.error("Could not connect to database to create goal.")
+        else:
+            try:
+                cursor = conn.cursor()
+                insert_query = """
+                    INSERT INTO SavingsGoals (household_id, name, target_amount, current_amount)
+                    VALUES (%s, %s, %s, %s);
+                """
+                cursor.execute(
+                    insert_query,
+                    (int(household_info["household_id"]), new_goal_name, float(new_target_amount), 0.0),
+                )
+                conn.commit()
+                cursor.close()
+                st.success("Savings goal created successfully.")
+                get_savings_goals.clear()
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error creating savings goal: {e}")
+# create saving goals feature Snaha ends
+
