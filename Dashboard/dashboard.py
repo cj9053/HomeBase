@@ -222,6 +222,13 @@ st.markdown("""
         color: Orange;
         border: 2px solid Orange;
     }
+    
+    /* Goal achieved styling */
+    .goal-achieved {
+        color: #4CAF50;
+        font-weight: bold;
+        font-size: 1.1em;
+    }
   
     
 </style>
@@ -1319,8 +1326,16 @@ if not goals_df.empty:
                 current = float(row['current_amount'])
                 target = float(row['target_amount'])
                 progress_pct = (current / target * 100) if target > 0 else 0
+                goal_achieved = current >= target
                 
-                st.progress(progress_pct / 100)
+                # Use green progress bar if goal is achieved
+                if goal_achieved:
+                    st.markdown(
+                        f'<div style="background-color: #4CAF50; height: 10px; border-radius: 5px; width: 100%;"></div>',
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.progress(progress_pct / 100)
                 
                 col_a, col_b = st.columns(2)
                 with col_a:
@@ -1328,58 +1343,84 @@ if not goals_df.empty:
                 with col_b:
                     st.metric("Target", f"${target:,.2f}")
                 
-                st.caption(f"{progress_pct:.1f}% Complete")
+                if goal_achieved:
+                    st.markdown('<p class="goal-achieved">🎉 Goal Achieved!</p>', unsafe_allow_html=True)
+                else:
+                    st.caption(f"{progress_pct:.1f}% Complete")
 
-                btn_col1, btn_col2 = st.columns(2)
-                
-                with btn_col1:
-                    pay_clicked = st.button(
-                        "➕ Pay",
-                        key=f"pay_goal_{goal_id}",
-                        use_container_width=True
-                    )
-                
-                with btn_col2:
+                # Show buttons - only show Pay button if goal not achieved
+                if goal_achieved:
+                    # Only show delete button when goal is achieved
                     delete_clicked = st.button(
                         "Delete",
                         key=f"delete_goal_{goal_id}",
                         use_container_width=True
                     )
+                    pay_clicked = False  # No payment option for achieved goals
+                else:
+                    # Show both Pay and Delete buttons for active goals
+                    btn_col1, btn_col2 = st.columns(2)
+                    
+                    with btn_col1:
+                        pay_clicked = st.button(
+                            "➕ Pay",
+                            key=f"pay_goal_{goal_id}",
+                            use_container_width=True
+                        )
+                    
+                    with btn_col2:
+                        delete_clicked = st.button(
+                            "Delete",
+                            key=f"delete_goal_{goal_id}",
+                            use_container_width=True
+                        )
                 
                 if pay_clicked:
                     st.session_state[f"show_payment_dialog_{goal_id}"] = True
                 
                 if st.session_state.get(f"show_payment_dialog_{goal_id}", False):
-                    with st.form(key=f"payment_form_{goal_id}"):
-                        remaining = target - current
-                        payment_amount = st.number_input(
-                            f"Payment amount (max ${remaining:,.2f})",
-                            min_value=0.01,
-                            max_value=float(remaining),
-                            step=10.0,
-                            format="%.2f",
-                            key=f"payment_input_{goal_id}"
+                    remaining = target - current
+                    payment_amount = st.number_input(
+                        f"Payment amount (max ${remaining:,.2f})",
+                        min_value=0.01,
+                        step=10.0,
+                        format="%.2f",
+                        key=f"payment_input_{goal_id}"
+                    )
+                    
+                    # Check if payment amount exceeds remaining
+                    is_valid_amount = payment_amount <= remaining
+                    
+                    col_submit, col_cancel = st.columns(2)
+                    with col_submit:
+                        submit_payment = st.button(
+                            "Submit Payment", 
+                            key=f"submit_payment_{goal_id}",
+                            use_container_width=True,
+                            disabled=not is_valid_amount
                         )
-                        
-                        col_submit, col_cancel = st.columns(2)
-                        with col_submit:
-                            submit_payment = st.form_submit_button("Submit Payment", use_container_width=True)
-                        with col_cancel:
-                            cancel_payment = st.form_submit_button("Cancel", use_container_width=True)
-                        
-                        if submit_payment:
-                            success, message = pay_towards_goal(goal_id, household_info["household_id"], payment_amount)
-                            if success:
-                                st.success(message)
-                                get_savings_goals.clear()
-                                st.session_state[f"show_payment_dialog_{goal_id}"] = False
-                                st.rerun()
-                            else:
-                                st.error(message)
-                        
-                        if cancel_payment:
+                    with col_cancel:
+                        cancel_payment = st.button(
+                            "Cancel", 
+                            key=f"cancel_payment_{goal_id}",
+                            use_container_width=True
+                        )
+                    
+                    if submit_payment and is_valid_amount:
+                        success, message = pay_towards_goal(goal_id, household_info["household_id"], payment_amount)
+                        if success:
+                            st.success(message)
+                            get_savings_goals.clear()
                             st.session_state[f"show_payment_dialog_{goal_id}"] = False
                             st.rerun()
+                        else:
+                            st.error(message)
+                            # Don't close the dialog - just show the error
+                            # User can adjust the amount and try again
+                    
+                    if cancel_payment:
+                        st.session_state[f"show_payment_dialog_{goal_id}"] = False
+                        st.rerun()
                 
                 if delete_clicked:
                     success = delete_savings_goal(goal_id, household_info["household_id"])
@@ -1482,27 +1523,12 @@ if not bills_df.empty:
                 
                 st.caption(f"Due: {due_date.strftime('%b %d, %Y')}")
                 
-                btn_col1, btn_col2 = st.columns(2)
-                
-                with btn_col1:
-                    if st.button(
-                        "Manage",
-                        key=f"manage_bill_{bill_id}",
-                        use_container_width=True
-                    ):
-                        open_bill_action(bill_id, row['name'], amount)
-                
-                with btn_col2:
-                    if status != 'paid' and st.button(
-                        "Mark Paid",
-                        key=f"pay_bill_{bill_id}",
-                        use_container_width=True
-                    ):
-                        success = mark_bill_as_paid(bill_id)
-                        if success:
-                            st.success("Bill marked as paid!")
-                            get_upcoming_bills.clear()
-                            st.rerun()
+                if st.button(
+                    "Manage",
+                    key=f"manage_bill_{bill_id}",
+                    use_container_width=True
+                ):
+                    open_bill_action(bill_id, row['name'], amount)
 
                 st.markdown("<br>", unsafe_allow_html=True)
 else:
