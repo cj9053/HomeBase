@@ -243,6 +243,13 @@ INSERT INTO Transactions (household_id, user_id, category_id, amount, notes, is_
 (1, 1, 3, 175, 'Bought decorations for winter formal', TRUE, NOW()),
 (1, 1, 4, 65, 'Breakfast supplies for house', TRUE, NOW()),
 (1, 1, 5, 120, 'Fixed broken washing machine', TRUE, NOW()),
+-- Recent transactions for emma_perez - last week
+(1, 1, 4, 45.50, 'Dinner at Applebees with sisters', TRUE, '2025-11-30 18:30:00'),
+(1, 1, 4, 78.20, 'Grocery shopping at Trader Joes', TRUE, '2025-11-28 14:15:00'),
+-- Recent transactions for emma_perez - last month
+(1, 1, 4, 52.30, 'Lunch at Applebees', TRUE, '2025-11-20 12:45:00'),
+(1, 1, 4, 92.15, 'Weekly groceries - Whole Foods', TRUE, '2025-11-14 16:20:00'),
+(1, 1, 4, 38.75, 'Late night Applebees run', TRUE, '2025-11-07 21:30:00'),
 -- Additional transactions from other Alpha Theta members
 (1, 4, 4, 110, 'Grocery shopping trip', TRUE, NOW()),
 (1, 6, 3, 50, 'Contributed to event fund', TRUE, NOW()),
@@ -254,6 +261,22 @@ INSERT INTO Transactions (household_id, user_id, category_id, amount, notes, is_
 (1, 18, 4, 85, 'Groceries for communal fridge', TRUE, NOW()),
 (1, 20, 2, 55, 'Split utility payment', TRUE, NOW()),
 (1, 25, 3, 80, 'Sisterhood retreat deposit', TRUE, NOW()),
+-- Recent Alpha Theta transactions (November - December 2) - Last 7 days
+(1, 2, 4, 62.45, 'Pizza night for study group', TRUE, '2025-12-01 19:45:00'),
+(1, 5, 4, 48.30, 'Coffee and bagels for house', TRUE, '2025-11-30 08:30:00'),
+(1, 7, 3, 95.00, 'Holiday party decorations', TRUE, '2025-11-29 15:20:00'),
+(1, 10, 4, 71.80, 'Grocery run - Costco', TRUE, '2025-11-27 13:10:00'),
+-- Recent Alpha Theta transactions (November) - Earlier in month
+(1, 3, 4, 55.25, 'House breakfast supplies', TRUE, '2025-11-24 10:15:00'),
+(1, 9, 2, 45.00, 'Gas bill contribution', TRUE, '2025-11-22 16:30:00'),
+(1, 13, 4, 83.50, 'Groceries and cleaning supplies', TRUE, '2025-11-19 14:45:00'),
+(1, 15, 3, 120.00, 'Formal dress shopping trip', TRUE, '2025-11-17 12:00:00'),
+(1, 17, 4, 39.90, 'Snacks for movie night', TRUE, '2025-11-15 18:20:00'),
+(1, 19, 4, 67.75, 'Weekly grocery shopping', TRUE, '2025-11-12 11:30:00'),
+(1, 22, 5, 85.00, 'Fixed kitchen sink', TRUE, '2025-11-10 09:45:00'),
+(1, 24, 4, 54.20, 'Dinner ingredients for house', TRUE, '2025-11-08 17:00:00'),
+(1, 26, 3, 75.00, 'Philanthropy event supplies', TRUE, '2025-11-05 13:25:00'),
+(1, 28, 4, 42.60, 'Late night Taco Bell run', TRUE, '2025-11-03 22:15:00'),
 -- Apartment
 (2,31,6,450,'Rent payment - October',TRUE,NOW()),
 (2,32,6,450,'Rent share',TRUE,NOW()),
