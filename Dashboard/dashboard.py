@@ -285,7 +285,7 @@ def get_all_users():
     conn = get_database_connection()
     if conn:
         query = """
-            SELECT user_id, username, email
+            SELECT user_id, username
             FROM adminusers
             ORDER BY user_id
         """
@@ -474,6 +474,131 @@ def get_spending_data(household_id, user_id, period_days):
         return total_df, avg_df, comparison_df
     return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
+@st.cache_data(ttl=60)
+def get_user_spending_data(household_id, user_id, period_days):
+    """Get individual user spending data for 'My spending' view"""
+    household_id = int(household_id)
+    user_id = int(user_id)
+    period_days = int(period_days)
+    
+    conn = get_database_connection()
+    if conn:
+        # User's total spending by category
+        user_category_query = """
+            SELECT 
+                c.name AS category,
+                SUM(t.amount) AS total
+            FROM Transactions t
+            JOIN Categories c ON t.category_id = c.category_id
+            WHERE t.household_id = %s 
+            AND t.user_id = %s
+            AND t.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            GROUP BY c.name
+        """
+        user_category_df = pd.read_sql(user_category_query, conn, params=(household_id, user_id, period_days))
+        
+        # User's average spending by category
+        user_avg_category_query = """
+            SELECT 
+                c.name AS category,
+                AVG(t.amount) AS avg_amount
+            FROM Transactions t
+            JOIN Categories c ON t.category_id = c.category_id
+            WHERE t.household_id = %s 
+            AND t.user_id = %s
+            AND t.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            GROUP BY c.name
+            ORDER BY avg_amount DESC
+        """
+        user_avg_category_df = pd.read_sql(user_avg_category_query, conn, params=(household_id, user_id, period_days))
+        
+        # Cumulative spending over time
+        cumulative_query = """
+            SELECT 
+                DATE(t.created_at) AS date,
+                SUM(t.amount) AS daily_total
+            FROM Transactions t
+            WHERE t.household_id = %s 
+            AND t.user_id = %s
+            AND t.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            GROUP BY DATE(t.created_at)
+            ORDER BY date ASC
+        """
+        cumulative_df = pd.read_sql(cumulative_query, conn, params=(household_id, user_id, period_days))
+        
+        # Calculate cumulative sum
+        if not cumulative_df.empty:
+            cumulative_df['cumulative_total'] = cumulative_df['daily_total'].cumsum()
+        
+        return user_category_df, user_avg_category_df, cumulative_df
+    return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+@st.cache_data(ttl=300)
+def get_household_members(household_id):
+    """Get all members of a household"""
+    household_id = int(household_id)
+    
+    conn = get_database_connection()
+    if conn:
+        query = """
+            SELECT u.user_id, u.username
+            FROM Users u
+            JOIN HouseholdMembers hm ON u.user_id = hm.user_id
+            WHERE hm.household_id = %s
+            ORDER BY u.username
+        """
+        df = pd.read_sql(query, conn, params=(household_id,))
+        return df
+    return pd.DataFrame()
+
+def record_payment_to_user(household_id, payer_user_id, receiver_user_id, amount):
+    """Record a payment/debt settlement between household members"""
+    conn = get_database_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            query = """
+                INSERT INTO DebtSettlements (household_id, payer_user_id, receiver_user_id, amount, status)
+                VALUES (%s, %s, %s, %s, 'settled')
+            """
+            cursor.execute(query, (int(household_id), int(payer_user_id), int(receiver_user_id), float(amount)))
+            conn.commit()
+            cursor.close()
+            return True
+        except Exception as e:
+            st.error(f"Error recording payment: {e}")
+            return False
+    return False
+
+@st.cache_data(ttl=60)
+def get_user_debt_settlements(household_id, user_id):
+    """Get debt settlements where user is payer or receiver"""
+    household_id = int(household_id)
+    user_id = int(user_id)
+    
+    conn = get_database_connection()
+    if conn:
+        query = """
+            SELECT 
+                ds.settlement_id,
+                ds.amount,
+                ds.status,
+                ds.created_at,
+                payer.username AS payer_name,
+                receiver.username AS receiver_name,
+                ds.payer_user_id,
+                ds.receiver_user_id
+            FROM DebtSettlements ds
+            JOIN Users payer ON ds.payer_user_id = payer.user_id
+            JOIN Users receiver ON ds.receiver_user_id = receiver.user_id
+            WHERE ds.household_id = %s 
+            AND (ds.payer_user_id = %s OR ds.receiver_user_id = %s)
+            ORDER BY ds.created_at DESC
+        """
+        df = pd.read_sql(query, conn, params=(household_id, user_id, user_id))
+        return df
+    return pd.DataFrame()
+
 @st.cache_data(ttl=300)
 def get_upcoming_bills(household_id):
     """Get upcoming bills"""
@@ -661,7 +786,7 @@ if st.sidebar.checkbox("🔧 Enable Master View (Demo)", value=st.session_state.
         # Create user selection dropdown
         user_options = {}
         for idx, row in all_users.iterrows():
-            label = f"{row['username']} ({row['email']})"
+            label = f"{row['username']}"
             user_options[label] = row['user_id']
         
         # Find current user label
@@ -683,7 +808,7 @@ if st.sidebar.checkbox("🔧 Enable Master View (Demo)", value=st.session_state.
             st.rerun()
         
         st.sidebar.markdown("---")
-        st.sidebar.info(f"Currently viewing: **{selected_user_label.split(' (')[0]}**")
+        st.sidebar.info(f"Currently viewing: **{selected_user_label}**")
     else:
         st.sidebar.warning("No users found in database")
 else:
@@ -762,11 +887,6 @@ with col_header_right:
             st.write(f"Username: {current_user_info.get('username', 'N/A')}")
             st.write(f"Email: {current_user_info.get('email', 'N/A')}")
             st.write(f"Role: {current_household_info.get('role', 'N/A')}")
-            st.markdown("---")
-            #create new bill Button CJ
-            if st.button("➕ Create New Bill", use_container_width=True, ):
-                 show_add_bill_form(household_info['household_id'])
-
             st.markdown("---")
             if st.button("🚪 Sign Out", use_container_width=True):
                 st.session_state.clear()
@@ -888,167 +1008,298 @@ period_days_map = {
 }
 period_days = period_days_map[period]
 
-# Get spending data
-total_spending_df, avg_spending_df, comparison_df = get_spending_data(
-    household_info['household_id'], 
-    st.session_state.user_id, 
-    period_days
-)
+# Get spending data based on view mode
+if view_mode == "My spending":
+    user_category_df, user_avg_category_df, cumulative_df = get_user_spending_data(
+        household_info['household_id'], 
+        st.session_state.user_id, 
+        period_days
+    )
+    
+    # Three Charts for My Spending View
+    chart_col1, chart_col2, chart_col3 = st.columns(3)
+    
+    with chart_col1:
+        st.markdown("#### My Total Spending")
+        if not user_category_df.empty:
+            total_amount = user_category_df['total'].sum()
+            fig1 = px.pie(
+                user_category_df, 
+                values='total', 
+                names='category',
+                hole=0.6,
+                color_discrete_sequence=px.colors.qualitative.Set3
+            )
+            fig1.update_layout(
+                showlegend=True,
+                height=300,
+                margin=dict(t=0, b=0, l=0, r=0),
+                annotations=[dict(text=f'${total_amount:.2f}', x=0.5, y=0.5, font_size=16, showarrow=False)]
+            )
+            fig1.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig1, use_container_width=True)
+        else:
+            st.info("No spending data available for this period")
+    
+    with chart_col2:
+        st.markdown("#### My Average Spending by Category")
+        if not user_avg_category_df.empty:
+            avg_amount = user_avg_category_df['avg_amount'].mean()
+            fig2 = px.pie(
+                user_avg_category_df, 
+                values='avg_amount', 
+                names='category',
+                hole=0.6,
+                color_discrete_sequence=px.colors.qualitative.Pastel
+            )
+            fig2.update_layout(
+                showlegend=True,
+                height=300,
+                margin=dict(t=0, b=0, l=0, r=0),
+                annotations=[dict(text=f'${avg_amount:.2f}', x=0.5, y=0.5, font_size=16, showarrow=False)]
+            )
+            fig2.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("No spending data available for this period")
+    
+    with chart_col3:
+        st.markdown("#### Cumulative Spending Over Time")
+        if not cumulative_df.empty:
+            fig3 = px.line(
+                cumulative_df, 
+                x='date', 
+                y='cumulative_total',
+                markers=True
+            )
+            fig3.update_layout(
+                showlegend=False,
+                height=300,
+                margin=dict(t=0, b=0, l=0, r=0),
+                xaxis_title="Date",
+                yaxis_title="Total ($)"
+            )
+            fig3.update_traces(line_color='#FF8C00')
+            st.plotly_chart(fig3, use_container_width=True)
+        else:
+            st.info("No spending data available for this period")
 
-# Three Donut Charts Section (4 columns each in 12-point grid)
-chart_col1, chart_col2, chart_col3 = st.columns(3)
-
-with chart_col1:
-    st.markdown("#### Total Spending")
-    if not total_spending_df.empty:
-        fig1 = px.pie(
-            total_spending_df, 
-            values='total', 
-            names='category',
-            hole=0.6,
-            color_discrete_sequence=px.colors.qualitative.Set3
-        )
-        fig1.update_layout(
-            showlegend=True,
-            height=300,
-            margin=dict(t=0, b=0, l=0, r=0)
-        )
-        fig1.update_traces(textposition='inside', textinfo='percent+label')
-        st.plotly_chart(fig1, use_container_width=True)
-    else:
-        st.info("No spending data available for this period")
-
-with chart_col2:
-    st.markdown("#### Average Spending by User")
-    if not avg_spending_df.empty:
-        fig2 = px.pie(
-            avg_spending_df, 
-            values='avg_amount', 
-            names='username',
-            hole=0.6,
-            color_discrete_sequence=px.colors.qualitative.Pastel
-        )
-        fig2.update_layout(
-            showlegend=True,
-            height=300,
-            margin=dict(t=0, b=0, l=0, r=0)
-        )
-        fig2.update_traces(textposition='inside', textinfo='percent+label')
-        st.plotly_chart(fig2, use_container_width=True)
-    else:
-        st.info("No spending data available for this period")
-
-with chart_col3:
-    st.markdown("#### My Spending vs Household")
-    if not comparison_df.empty and comparison_df.iloc[0]['my_spending'] is not None:
-        my_spend = float(comparison_df.iloc[0]['my_spending'] or 0)
-        household_spend = float(comparison_df.iloc[0]['household_spending'] or 0)
-        
-        comparison_data = pd.DataFrame({
-            'Category': ['My Spending', 'Others Spending'],
-            'Amount': [my_spend, household_spend]
-        })
-        
-        fig3 = px.pie(
-            comparison_data, 
-            values='Amount', 
-            names='Category',
-            hole=0.6,
-            color_discrete_sequence=['#4CAF50', '#2196F3']
-        )
-        fig3.update_layout(
-            showlegend=True,
-            height=300,
-            margin=dict(t=0, b=0, l=0, r=0)
-        )
-        fig3.update_traces(textposition='inside', textinfo='percent+label')
-        st.plotly_chart(fig3, use_container_width=True)
-    else:
-        st.info("No spending comparison data available")
+else:
+    # Household spending view (original charts)
+    total_spending_df, avg_spending_df, comparison_df = get_spending_data(
+        household_info['household_id'], 
+        st.session_state.user_id, 
+        period_days
+    )
+    
+    # Three Donut Charts Section (4 columns each in 12-point grid)
+    chart_col1, chart_col2, chart_col3 = st.columns(3)
+    
+    with chart_col1:
+        st.markdown("#### Total Spending")
+        if not total_spending_df.empty:
+            total_amount = total_spending_df['total'].sum()
+            fig1 = px.pie(
+                total_spending_df, 
+                values='total', 
+                names='category',
+                hole=0.6,
+                color_discrete_sequence=px.colors.qualitative.Set3
+            )
+            fig1.update_layout(
+                showlegend=True,
+                height=300,
+                margin=dict(t=0, b=0, l=0, r=0),
+                annotations=[dict(text=f'${total_amount:.2f}', x=0.5, y=0.5, font_size=16, showarrow=False)]
+            )
+            fig1.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig1, use_container_width=True)
+        else:
+            st.info("No spending data available for this period")
+    
+    with chart_col2:
+        st.markdown("#### Average Spending by User")
+        if not avg_spending_df.empty:
+            avg_amount = avg_spending_df['avg_amount'].mean()
+            fig2 = px.pie(
+                avg_spending_df, 
+                values='avg_amount', 
+                names='username',
+                hole=0.6,
+                color_discrete_sequence=px.colors.qualitative.Pastel
+            )
+            fig2.update_layout(
+                showlegend=True,
+                height=300,
+                margin=dict(t=0, b=0, l=0, r=0),
+                annotations=[dict(text=f'${avg_amount:.2f}', x=0.5, y=0.5, font_size=16, showarrow=False)]
+            )
+            fig2.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("No spending data available for this period")
+    
+    with chart_col3:
+        st.markdown("#### My Spending vs Household")
+        if not comparison_df.empty and comparison_df.iloc[0]['my_spending'] is not None:
+            my_spend = float(comparison_df.iloc[0]['my_spending'] or 0)
+            household_spend = float(comparison_df.iloc[0]['household_spending'] or 0)
+            
+            comparison_data = pd.DataFrame({
+                'Category': ['My Spending', 'Others Spending'],
+                'Amount': [my_spend, household_spend]
+            })
+            
+            fig3 = px.pie(
+                comparison_data, 
+                values='Amount', 
+                names='Category',
+                hole=0.6,
+                color_discrete_sequence=['#4CAF50', '#2196F3']
+            )
+            fig3.update_layout(
+                showlegend=True,
+                height=300,
+                margin=dict(t=0, b=0, l=0, r=0)
+            )
+            fig3.update_traces(textposition='inside', textinfo='percent+label')
+            st.plotly_chart(fig3, use_container_width=True)
+        else:
+            st.info("No spending comparison data available")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Recent Transactions and Upcoming Bills Section
-trans_col, bills_col = st.columns([6, 6])
+# Pay a Household Member Section
+st.markdown('<h4 style="color: white;">Pay a Household Member</h4>', unsafe_allow_html=True)
 
-with trans_col:
-    st.markdown('<h4 style="color: white;">Recent Transactions</h4>', unsafe_allow_html=True)
-    # Increase days to 365 to get more historical transactions
-    transactions_df = get_recent_transactions(household_info['household_id'], days=365)
-    with st.expander("Recent Transactions", expanded=False,):
-        if not transactions_df.empty:
-            for index, row in transactions_df.iterrows():
-                # Build your HTML string using f-strings
-                html_row = f"""
-                <div class="transaction-row">
-                    <div>
-                        <strong style="color: orange;">{row['notes']}</strong>
-                        <span class="t-date">by {row['username']} - {row['created_at']}</span>
-                    </div>
-                    <div style="text-align: right;">
-                        <strong style="color: orange;">${row['amount']:.2f}</strong>
-                        <br>
-                        <span class="t-category">{row['category']}</span>
-                    </div>
+if 'show_payment_form' not in st.session_state:
+    st.session_state.show_payment_form = False
+
+if st.button("💸 Make a Payment", key="toggle_payment"):
+    st.session_state.show_payment_form = not st.session_state.show_payment_form
+
+if st.session_state.show_payment_form:
+    household_members = get_household_members(household_info['household_id'])
+    
+    # Filter out current user from receiver options
+    receiver_options = household_members[household_members['user_id'] != st.session_state.user_id]
+    
+    if not receiver_options.empty:
+        with st.form("payment_form"):
+            st.markdown("### Record a payment")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Create a mapping of username to user_id
+                receiver_dict = dict(zip(receiver_options['username'], receiver_options['user_id']))
+                selected_receiver = st.selectbox(
+                    "Pay to",
+                    options=list(receiver_dict.keys())
+                )
+            
+            with col2:
+                payment_amount = st.number_input(
+                    "Amount ($)",
+                    min_value=0.01,
+                    step=0.01,
+                    format="%.2f"
+                )
+            
+            payment_note = st.text_input("Note (optional)", placeholder="e.g., Rent split, groceries reimbursement")
+            
+            col_submit, col_cancel = st.columns(2)
+            with col_submit:
+                submit_payment = st.form_submit_button("Record Payment", use_container_width=True)
+            with col_cancel:
+                cancel_payment = st.form_submit_button("Cancel", use_container_width=True)
+            
+            if submit_payment:
+                receiver_id = receiver_dict[selected_receiver]
+                success = record_payment_to_user(
+                    household_info['household_id'],
+                    st.session_state.user_id,
+                    receiver_id,
+                    payment_amount
+                )
+                if success:
+                    st.success(f"Payment of ${payment_amount:.2f} to {selected_receiver} recorded!")
+                    st.session_state.show_payment_form = False
+                    get_user_debt_settlements.clear()
+                    st.rerun()
+            
+            if cancel_payment:
+                st.session_state.show_payment_form = False
+                st.rerun()
+    else:
+        st.info("No other household members found to pay.")
+
+# Display debt settlements for the user
+st.markdown("---")
+debt_settlements = get_user_debt_settlements(household_info['household_id'], st.session_state.user_id)
+
+with st.expander("💰 My Payment History", expanded=False):
+    if not debt_settlements.empty:
+        for index, row in debt_settlements.iterrows():
+            # Determine if current user is payer or receiver
+            is_payer = row['payer_user_id'] == st.session_state.user_id
+            
+            if is_payer:
+                description = f"You paid {row['receiver_name']}"
+                amount_color = "red"
+                amount_prefix = "-"
+            else:
+                description = f"{row['payer_name']} paid you"
+                amount_color = "green"
+                amount_prefix = "+"
+            
+            status_class = f"status-{row['status']}"
+            
+            html_row = f"""
+            <div class="transaction-row">
+                <div>
+                    <strong style="color: black;">{description}</strong>
+                    <span class="t-date">{row['created_at']}</span>
                 </div>
-                """
-                st.markdown(html_row, unsafe_allow_html=True)
-        else:
-            st.info("No recent transactions found.")
-
-    # if not transactions_df.empty:
-    #     for idx, row in transactions_df.iterrows():
-    #         col1, col2, col3 = st.columns([3, 6, 3])
-    #         with col1:
-    #             st.write(f"**${row['amount']:.2f}**")
-    #         with col2:
-    #             st.write(f"{row['notes'] or row['category']}")
-    #             st.caption(f"by {row['username']} - {row['created_at'].strftime('%b %d, %Y')}")
-    #         with col3:
-    #             st.write(f"_{row['category']}_")
-    #         st.markdown("---")
-    # else:
-    #     st.info("No recent transactions found")
-
-check_and_update_overdue_bills(household_info['household_id'])
-bills_df = get_upcoming_bills(household_info['household_id'])
-
-with bills_col:
-    st.markdown('<h4 style="color: white;">Upcoming Bills</h4>', unsafe_allow_html=True)
-    bills_df = get_upcoming_bills(household_info['household_id'])
-    with st.expander("Upcoming Transactions", expanded=False):
-        if not bills_df.empty:
-            for idx, row in bills_df.iterrows():
-                st.markdown(f'<div class="bill-list-row">', unsafe_allow_html=True)
-                col1, col2, col3 = st.columns([4, 4, 4])
-                with col1:
-                    # st.write(f"**{row['name']}**")
-                    if st.button(f"🧾 {row['name']}", key=f"bill_btn_{row['bill_id']}", use_container_width=True):
-                        open_bill_action(row['bill_id'], row['name'], row['amount'])
-                with col2:
-                    # st.write(f"**${row['amount']:.2f}**")
-                    st.markdown(f"<div style='padding-top: 10px;'><b>${row['amount']:.2f}</b></div>", unsafe_allow_html=True)
-                with col3:
-                #     status_class = f"status-{row['status']}"
-                #     st.markdown(f'<span class="{status_class}">{row["status"].upper()}</span>', unsafe_allow_html=True)
-                # st.caption(f"Due: {row['due_date'].strftime('%b %d, %Y')}")
-                    status_class = f"status-{row['status']}"
-                    st.markdown(f"""
-                    <div style='padding-top: 5px; text-align: right;'>
-                        <span class="{status_class}">{row["status"].upper()}</span>
-                        <br>
-                        <span style='font-size: 0.8em; color: #666;'>{row['due_date'].strftime('%b %d')}</span>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-
-            st.markdown('</div>', unsafe_allow_html=True) # Close bill-list-row wrapper
-        else:
-            st.info("No upcoming bills found")
+                <div style="text-align: right;">
+                    <strong style="color: {amount_color};">{amount_prefix}${row['amount']:.2f}</strong>
+                    <br>
+                    <span class="{status_class}">{row['status'].upper()}</span>
+                </div>
+            </div>
+            """
+            st.markdown(html_row, unsafe_allow_html=True)
+    else:
+        st.info("No payment history found.")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
+# Recent Transactions - Full Width
+st.markdown('<h4 style="color: white;">Recent Transactions</h4>', unsafe_allow_html=True)
+# Increase days to 365 to get more historical transactions
+transactions_df = get_recent_transactions(household_info['household_id'], days=365)
+with st.expander("Recent Transactions", expanded=False,):
+    if not transactions_df.empty:
+        for index, row in transactions_df.iterrows():
+            # Build your HTML string using f-strings
+            html_row = f"""
+            <div class="transaction-row">
+                <div>
+                    <strong style="color: black;">{row['notes']}</strong>
+                    <span class="t-date">by {row['username']} - {row['created_at']}</span>
+                </div>
+                <div style="text-align: right;">
+                    <strong style="color: red;">${row['amount']:.2f}</strong>
+                    <br>
+                    <span class="t-category">{row['category']}</span>
+                </div>
+            </div>
+            """
+            st.markdown(html_row, unsafe_allow_html=True)
+    else:
+        st.info("No recent transactions found.")
 
+st.markdown("<br>", unsafe_allow_html=True)
 
 #create savings goals feature Snaha begins
 
@@ -1142,43 +1393,160 @@ else:
     st.info("No savings goals set for this household")
 
 st.markdown("---")
-st.markdown("### Create a new savings goal")
 
-with st.form("create_savings_goal"):
-    new_goal_name = st.text_input("Goal name")
-    new_target_amount = st.number_input(
-        "Target amount ($)",
-        min_value=0.0,
-        step=10.0,
-        format="%.2f",
-    )
+# Toggle button for creating new savings goal
+if 'show_create_goal_form' not in st.session_state:
+    st.session_state.show_create_goal_form = False
 
-    create_submitted = st.form_submit_button("Create goal")
+if st.button("➕ Create New Savings Goal", key="toggle_create_goal"):
+    st.session_state.show_create_goal_form = not st.session_state.show_create_goal_form
 
-if create_submitted:
-    if not new_goal_name or new_target_amount <= 0:
-        st.error("Please enter a goal name and a positive target amount.")
-    else:
-        conn = get_database_connection()
-        if conn is None:
-            st.error("Could not connect to database to create goal.")
+if st.session_state.show_create_goal_form:
+    st.markdown("### Create a new savings goal")
+    
+    with st.form("create_savings_goal"):
+        new_goal_name = st.text_input("Goal name")
+        new_target_amount = st.number_input(
+            "Target amount ($)",
+            min_value=0.0,
+            step=10.0,
+            format="%.2f",
+        )
+
+        col_submit, col_cancel = st.columns(2)
+        with col_submit:
+            create_submitted = st.form_submit_button("Create goal", use_container_width=True)
+        with col_cancel:
+            cancel_create = st.form_submit_button("Cancel", use_container_width=True)
+    
+    if create_submitted:
+        if not new_goal_name or new_target_amount <= 0:
+            st.error("Please enter a goal name and a positive target amount.")
         else:
-            try:
-                cursor = conn.cursor()
-                insert_query = """
-                    INSERT INTO SavingsGoals (household_id, name, target_amount, current_amount)
-                    VALUES (%s, %s, %s, %s);
-                """
-                cursor.execute(
-                    insert_query,
-                    (int(household_info["household_id"]), new_goal_name, float(new_target_amount), 0.0),
-                )
-                conn.commit()
-                cursor.close()
-                st.success("Savings goal created successfully.")
-                get_savings_goals.clear()
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error creating savings goal: {e}")
+            conn = get_database_connection()
+            if conn is None:
+                st.error("Could not connect to database to create goal.")
+            else:
+                try:
+                    cursor = conn.cursor()
+                    insert_query = """
+                        INSERT INTO SavingsGoals (household_id, name, target_amount, current_amount)
+                        VALUES (%s, %s, %s, %s);
+                    """
+                    cursor.execute(
+                        insert_query,
+                        (int(household_info["household_id"]), new_goal_name, float(new_target_amount), 0.0),
+                    )
+                    conn.commit()
+                    cursor.close()
+                    st.success("Savings goal created successfully.")
+                    get_savings_goals.clear()
+                    st.session_state.show_create_goal_form = False
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error creating savings goal: {e}")
+    
+    if cancel_create:
+        st.session_state.show_create_goal_form = False
+        st.rerun()
+
 # create saving goals feature Snaha ends
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# Upcoming Bills Section
+check_and_update_overdue_bills(household_info['household_id'])
+st.markdown('<h4 style="color: white;">Upcoming Bills</h4>', unsafe_allow_html=True)
+bills_df = get_upcoming_bills(household_info['household_id'])
+
+if not bills_df.empty:
+    bills_cols = st.columns(3)
+    
+    for idx, row in bills_df.iterrows():
+        col_idx = idx % 3
+        with bills_cols[col_idx]:
+            with st.container():
+                bill_id = int(row["bill_id"])
+                st.markdown(f"**{row['name']}**")
+                
+                amount = float(row['amount'])
+                due_date = row['due_date']
+                status = row['status']
+                
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.metric("Amount", f"${amount:,.2f}")
+                with col_b:
+                    status_class = f"status-{status}"
+                    st.markdown(f'<div style="padding-top: 10px;"><span class="{status_class}">{status.upper()}</span></div>', unsafe_allow_html=True)
+                
+                st.caption(f"Due: {due_date.strftime('%b %d, %Y')}")
+                
+                btn_col1, btn_col2 = st.columns(2)
+                
+                with btn_col1:
+                    if st.button(
+                        "Manage",
+                        key=f"manage_bill_{bill_id}",
+                        use_container_width=True
+                    ):
+                        open_bill_action(bill_id, row['name'], amount)
+                
+                with btn_col2:
+                    if status != 'paid' and st.button(
+                        "Mark Paid",
+                        key=f"pay_bill_{bill_id}",
+                        use_container_width=True
+                    ):
+                        success = mark_bill_as_paid(bill_id)
+                        if success:
+                            st.success("Bill marked as paid!")
+                            get_upcoming_bills.clear()
+                            st.rerun()
+
+                st.markdown("<br>", unsafe_allow_html=True)
+else:
+    st.info("No upcoming bills found")
+
+st.markdown("---")
+
+# Toggle button for creating new bill
+if 'show_create_bill_form' not in st.session_state:
+    st.session_state.show_create_bill_form = False
+
+if st.button("➕ Create New Bill", key="toggle_create_bill"):
+    st.session_state.show_create_bill_form = not st.session_state.show_create_bill_form
+
+if st.session_state.show_create_bill_form:
+    st.markdown("### Create a new bill")
+    
+    with st.form("create_bill_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            bill_name = st.text_input("Bill Name", placeholder="e.g. Internet, Rent")
+        with col2:
+            bill_amount = st.number_input("Amount ($)", min_value=0.0, step=0.01)
+        
+        bill_due_date = st.date_input("Due Date")
+        
+        col_submit, col_cancel = st.columns(2)
+        with col_submit:
+            bill_submitted = st.form_submit_button("Create Bill", use_container_width=True)
+        with col_cancel:
+            cancel_bill = st.form_submit_button("Cancel", use_container_width=True)
+    
+    if bill_submitted:
+        if bill_name and bill_amount > 0:
+            success = create_bill(household_info['household_id'], bill_name, bill_amount, bill_due_date)
+            if success:
+                st.success("Bill created successfully!")
+                get_upcoming_bills.clear()
+                st.session_state.show_create_bill_form = False
+                st.rerun()
+        else:
+            st.warning("Please enter a valid name and amount.")
+    
+    if cancel_bill:
+        st.session_state.show_create_bill_form = False
+        st.rerun()
 
