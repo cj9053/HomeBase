@@ -71,8 +71,8 @@ st.markdown("""
 
     .stButton button:hover {
         background-color:transparent;
-        color: black;
-        border: 2px solid black;
+        color: Orange;
+        border: 2px solid Orange;
     }
             
     /* 12-point grid system */
@@ -193,6 +193,35 @@ st.markdown("""
         color: #f44336;
         font-weight: 600;
     }
+    
+    /* Radio button styling */
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label > div[data-testid="stMarkdownContainer"] > p {
+        color: #1f1f1f;
+    }
+    
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label[data-baseweb="radio"] > div:first-child {
+        background-color: white;
+        border-color: #ddd;
+    }
+    
+    div[data-testid="stRadio"] > div[role="radiogroup"] > label[data-baseweb="radio"]:has(input:checked) > div:first-child {
+        background-color: orange;
+        border-color: orange;
+    }
+    
+    /* Form submit button styling */
+    .stFormSubmitButton button {
+        background-color: Orange;
+        font-weight: bold;
+        border: 2px solid black;
+        color: black;
+    }
+    
+    .stFormSubmitButton button:hover {
+        background-color: transparent;
+        color: Orange;
+        border: 2px solid Orange;
+    }
   
     
 </style>
@@ -252,15 +281,13 @@ def get_household_info(user_id):
 
 @st.cache_data(ttl=300)
 def get_all_users():
-    """Get all users for master view toggle"""
+    """Get all admin users from the adminusers view"""
     conn = get_database_connection()
     if conn:
         query = """
-            SELECT u.user_id, u.username, u.email, h.name as household_name
-            FROM Users u
-            LEFT JOIN HouseholdMembers hm ON u.user_id = hm.user_id
-            LEFT JOIN Households h ON hm.household_id = h.household_id
-            ORDER BY u.user_id
+            SELECT user_id, username, email
+            FROM adminusers
+            ORDER BY user_id
         """
         df = pd.read_sql(query, conn)
         return df
@@ -512,6 +539,40 @@ def delete_savings_goal(goal_id, household_id):
             return False
     return False
 
+def pay_towards_goal(goal_id, household_id, payment_amount):
+    """Add payment towards a savings goal, ensuring it doesn't exceed target"""
+    conn = get_database_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # First get current and target amounts
+            select_query = "SELECT current_amount, target_amount FROM SavingsGoals WHERE goal_id = %s AND household_id = %s"
+            cursor.execute(select_query, (int(goal_id), int(household_id)))
+            result = cursor.fetchone()
+            
+            if result:
+                current_amount = float(result[0])
+                target_amount = float(result[1])
+                new_amount = current_amount + float(payment_amount)
+                
+                # Check if payment would exceed target
+                if new_amount > target_amount:
+                    cursor.close()
+                    return False, "Payment would exceed target amount"
+                
+                # Update the current amount
+                update_query = "UPDATE SavingsGoals SET current_amount = %s WHERE goal_id = %s AND household_id = %s"
+                cursor.execute(update_query, (new_amount, int(goal_id), int(household_id)))
+                conn.commit()
+                cursor.close()
+                return True, "Payment added successfully"
+            else:
+                cursor.close()
+                return False, "Goal not found"
+        except Exception as e:
+            return False, f"Error updating savings goal: {e}"
+    return False, "Database connection failed"
+
 
 def update_user_name(new_username):
     user_id_to_update = st.session_state.get('user_id') # Use .get for safety
@@ -591,7 +652,7 @@ if st.sidebar.checkbox("🔧 Enable Master View (Demo)", value=st.session_state.
     st.session_state.show_master_view = True
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 👥 Switch User View")
-    st.sidebar.caption("Select a user to view their dashboard")
+    st.sidebar.caption("Select an admin user to view their dashboard")
     
     # Get all users
     all_users = get_all_users()
@@ -601,8 +662,6 @@ if st.sidebar.checkbox("🔧 Enable Master View (Demo)", value=st.session_state.
         user_options = {}
         for idx, row in all_users.iterrows():
             label = f"{row['username']} ({row['email']})"
-            if pd.notna(row['household_name']):
-                label += f" - {row['household_name']}"
             user_options[label] = row['user_id']
         
         # Find current user label
@@ -801,7 +860,7 @@ def create_bill(household_id, name, amount, due_date):
 # Time period selector for charts
 col_title, col_period = st.columns([9, 3])
 with col_title:
-    st.markdown('<p class="section-title">Spending Overview</p>', unsafe_allow_html=True)
+    st.markdown('<h4 style="color: white;">Spending Overview</h4>', unsafe_allow_html=True)
 with col_period:
     period = st.selectbox(
         "Time Period",
@@ -913,7 +972,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 trans_col, bills_col = st.columns([6, 6])
 
 with trans_col:
-    st.markdown('<p class="section-title">Recent Transactions</p>', unsafe_allow_html=True)
+    st.markdown('<h4 style="color: white;">Recent Transactions</h4>', unsafe_allow_html=True)
     # Increase days to 365 to get more historical transactions
     transactions_df = get_recent_transactions(household_info['household_id'], days=365)
     with st.expander("Recent Transactions", expanded=False,):
@@ -923,11 +982,11 @@ with trans_col:
                 html_row = f"""
                 <div class="transaction-row">
                     <div>
-                        <strong>{row['notes']}</strong>
+                        <strong style="color: orange;">{row['notes']}</strong>
                         <span class="t-date">by {row['username']} - {row['created_at']}</span>
                     </div>
                     <div style="text-align: right;">
-                        <strong>${row['amount']:.2f}</strong>
+                        <strong style="color: orange;">${row['amount']:.2f}</strong>
                         <br>
                         <span class="t-category">{row['category']}</span>
                     </div>
@@ -955,7 +1014,7 @@ check_and_update_overdue_bills(household_info['household_id'])
 bills_df = get_upcoming_bills(household_info['household_id'])
 
 with bills_col:
-    st.markdown('<p class="section-title">Upcoming Bills</p>', unsafe_allow_html=True)
+    st.markdown('<h4 style="color: white;">Upcoming Bills</h4>', unsafe_allow_html=True)
     bills_df = get_upcoming_bills(household_info['household_id'])
     with st.expander("Upcoming Transactions", expanded=False):
         if not bills_df.empty:
@@ -993,7 +1052,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 #create savings goals feature Snaha begins
 
-st.markdown('<p class="section-title">Savings Goals</p>', unsafe_allow_html=True)
+st.markdown('<h4 style="color: white;">Savings Goals</h4>', unsafe_allow_html=True)
 goals_df = get_savings_goals(household_info['household_id'])
 
 if not goals_df.empty:
@@ -1020,10 +1079,57 @@ if not goals_df.empty:
                 
                 st.caption(f"{progress_pct:.1f}% Complete")
 
-                delete_clicked = st.button(
-                    "Delete goal",
-                    key=f"delete_goal_{goal_id}"
-                )
+                btn_col1, btn_col2 = st.columns(2)
+                
+                with btn_col1:
+                    pay_clicked = st.button(
+                        "➕ Pay",
+                        key=f"pay_goal_{goal_id}",
+                        use_container_width=True
+                    )
+                
+                with btn_col2:
+                    delete_clicked = st.button(
+                        "Delete",
+                        key=f"delete_goal_{goal_id}",
+                        use_container_width=True
+                    )
+                
+                if pay_clicked:
+                    st.session_state[f"show_payment_dialog_{goal_id}"] = True
+                
+                if st.session_state.get(f"show_payment_dialog_{goal_id}", False):
+                    with st.form(key=f"payment_form_{goal_id}"):
+                        remaining = target - current
+                        payment_amount = st.number_input(
+                            f"Payment amount (max ${remaining:,.2f})",
+                            min_value=0.01,
+                            max_value=float(remaining),
+                            step=10.0,
+                            format="%.2f",
+                            key=f"payment_input_{goal_id}"
+                        )
+                        
+                        col_submit, col_cancel = st.columns(2)
+                        with col_submit:
+                            submit_payment = st.form_submit_button("Submit Payment", use_container_width=True)
+                        with col_cancel:
+                            cancel_payment = st.form_submit_button("Cancel", use_container_width=True)
+                        
+                        if submit_payment:
+                            success, message = pay_towards_goal(goal_id, household_info["household_id"], payment_amount)
+                            if success:
+                                st.success(message)
+                                get_savings_goals.clear()
+                                st.session_state[f"show_payment_dialog_{goal_id}"] = False
+                                st.rerun()
+                            else:
+                                st.error(message)
+                        
+                        if cancel_payment:
+                            st.session_state[f"show_payment_dialog_{goal_id}"] = False
+                            st.rerun()
+                
                 if delete_clicked:
                     success = delete_savings_goal(goal_id, household_info["household_id"])
                     if success:
