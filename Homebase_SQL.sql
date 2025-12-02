@@ -481,6 +481,19 @@ WHERE user_id IN (
 
 SELECT * FROM AdminUsers;
 
+-- Creating a view of all non-admin users
+
+CREATE VIEW NonAdminUsers AS
+SELECT username, user_id
+FROM Users
+WHERE user_id NOT IN (
+    SELECT admin_user_id
+    FROM Households
+);
+
+SELECT * FROM NonAdminUsers;
+
+
 
 
 

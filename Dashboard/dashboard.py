@@ -9,7 +9,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 
-
+# Styling for the page
+ 
 # Page configuration
 st.set_page_config(
     page_title="Homebase Dashboard",
@@ -234,7 +235,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Database connection
+# Database connection 
 @st.cache_resource
 def get_database_connection():
     """Establish connection to MySQL database using secrets"""
@@ -250,6 +251,8 @@ def get_database_connection():
     except Exception as e:
         st.error(f"Database connection failed: {e}")
         return None
+
+
 
 # Data fetching functions
 @st.cache_data(ttl=300)
@@ -287,13 +290,18 @@ def get_household_info(user_id):
     return None
 
 @st.cache_data(ttl=300)
-def get_all_users():
-    """Get all admin users from the adminusers view"""
+def get_all_users(user_type='admin'):
+    """Get users from the specified view (admin or non-admin)"""
     conn = get_database_connection()
     if conn:
-        query = """
+        if user_type == 'non-admin':
+            view_name = 'nonadminusers'
+        else:
+            view_name = 'adminusers'
+        
+        query = f"""
             SELECT user_id, username
-            FROM adminusers
+            FROM {view_name}
             ORDER BY user_id
         """
         df = pd.read_sql(query, conn)
@@ -324,17 +332,42 @@ def check_and_update_overdue_bills(household_id):
             st.error(f"Error updating overdue bills: {e}")
 
 
-def mark_bill_as_paid(bill_id):
+def mark_bill_as_paid(bill_id, user_id=None):
 
     conn = get_database_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            query = "UPDATE Bills SET status = 'paid' WHERE bill_id = %s"
-            cursor.execute(query, (bill_id,))
-            conn.commit()
-            cursor.close()
-            return True
+            
+            # Get bill details
+            cursor.execute("SELECT household_id, name, amount FROM Bills WHERE bill_id = %s", (bill_id,))
+            bill_result = cursor.fetchone()
+            
+            if bill_result:
+                household_id = bill_result[0]
+                bill_name = bill_result[1]
+                bill_amount = bill_result[2]
+                
+                # Update bill status
+                query = "UPDATE Bills SET status = 'paid' WHERE bill_id = %s"
+                cursor.execute(query, (bill_id,))
+                
+                # Create transaction if user_id is provided
+                if user_id is not None:
+                    # Get or create permanent 'Bill' category
+                    category_id = get_or_create_permanent_category(household_id, 'Bill', 'bill')
+                    
+                    if category_id:
+                        transaction_query = """
+                            INSERT INTO Transactions (household_id, user_id, category_id, amount, notes, is_shared)
+                            VALUES (%s, %s, %s, %s, %s, TRUE)
+                        """
+                        transaction_notes = f"Paid bill: {bill_name}"
+                        cursor.execute(transaction_query, (household_id, user_id, category_id, float(bill_amount), transaction_notes))
+                
+                conn.commit()
+                cursor.close()
+                return True
         except Exception as e:
             st.error(f"Error updating bill: {e}")
             return False
@@ -355,7 +388,7 @@ def open_bill_action(bill_id, bill_name, amount):
     with col1:
 
         if st.button("Mark as Paid", use_container_width=True, type="primary"):
-            success = mark_bill_as_paid(bill_id)
+            success = mark_bill_as_paid(bill_id, st.session_state.user_id)
             if success:
                 st.success("Bill paid")
                 get_upcoming_bills.clear() # Clear cache so it vanishes from list
@@ -363,20 +396,22 @@ def open_bill_action(bill_id, bill_name, amount):
 
 
     with col2:
+        if is_admin():
+            if st.button("Delete Bill", use_container_width=True, type="secondary"):
+                st.session_state[f"confirm_delete_{bill_id}"] = True
 
-        if st.button("Delete Bill", use_container_width=True, type="secondary"):
-            st.session_state[f"confirm_delete_{bill_id}"] = True
 
-
-        if st.session_state.get(f"confirm_delete_{bill_id}", False):
             if st.session_state.get(f"confirm_delete_{bill_id}", False):
-                st.warning("Are you sure?")
-                if st.button("Yes, Delete Permanently", type="primary", use_container_width=True):
-                    success = delete_bill(bill_id)
-                    if success:
-                        st.success("Bill deleted.")
-                        get_upcoming_bills.clear() 
-                        st.rerun()
+                if st.session_state.get(f"confirm_delete_{bill_id}", False):
+                    st.warning("Are you sure?")
+                    if st.button("Yes, Delete Permanently", type="primary", use_container_width=True):
+                        success = delete_bill(bill_id)
+                        if success:
+                            st.success("Bill deleted.")
+                            get_upcoming_bills.clear() 
+                            st.rerun()
+        else:
+            st.caption("Admin only")
 
 
 def delete_bill(bill_id):
@@ -439,15 +474,20 @@ def get_spending_data(household_id, user_id, period_days):
     conn = get_database_connection()
     if conn:
         # Total household spending by category
+        # For Bill and Contribution, extract the specific name from notes
         total_query = """
             SELECT 
-                c.name AS category,
+                CASE 
+                    WHEN c.name = 'Bill' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(t.notes, ': ', -1), '\n', 1)
+                    WHEN c.name = 'Contribution' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(t.notes, 'to ', -1), '\n', 1)
+                    ELSE c.name
+                END AS category,
                 SUM(t.amount) AS total
             FROM Transactions t
             JOIN Categories c ON t.category_id = c.category_id
             WHERE t.household_id = %s 
             AND t.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
-            GROUP BY c.name
+            GROUP BY category
         """
         total_df = pd.read_sql(total_query, conn, params=(household_id, period_days))
         
@@ -491,30 +531,39 @@ def get_user_spending_data(household_id, user_id, period_days):
     conn = get_database_connection()
     if conn:
         # User's total spending by category
+        # For Bill and Contribution, extract the specific name from notes
         user_category_query = """
             SELECT 
-                c.name AS category,
+                CASE 
+                    WHEN c.name = 'Bill' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(t.notes, ': ', -1), '\n', 1)
+                    WHEN c.name = 'Contribution' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(t.notes, 'to ', -1), '\n', 1)
+                    ELSE c.name
+                END AS category,
                 SUM(t.amount) AS total
             FROM Transactions t
             JOIN Categories c ON t.category_id = c.category_id
             WHERE t.household_id = %s 
             AND t.user_id = %s
             AND t.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
-            GROUP BY c.name
+            GROUP BY category
         """
         user_category_df = pd.read_sql(user_category_query, conn, params=(household_id, user_id, period_days))
         
         # User's average spending by category
         user_avg_category_query = """
             SELECT 
-                c.name AS category,
+                CASE 
+                    WHEN c.name = 'Bill' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(t.notes, ': ', -1), '\n', 1)
+                    WHEN c.name = 'Contribution' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(t.notes, 'to ', -1), '\n', 1)
+                    ELSE c.name
+                END AS category,
                 AVG(t.amount) AS avg_amount
             FROM Transactions t
             JOIN Categories c ON t.category_id = c.category_id
             WHERE t.household_id = %s 
             AND t.user_id = %s
             AND t.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
-            GROUP BY c.name
+            GROUP BY category
             ORDER BY avg_amount DESC
         """
         user_avg_category_df = pd.read_sql(user_avg_category_query, conn, params=(household_id, user_id, period_days))
@@ -558,22 +607,120 @@ def get_household_members(household_id):
         return df
     return pd.DataFrame()
 
-def record_payment_to_user(household_id, payer_user_id, receiver_user_id, amount):
+def record_payment_to_user(household_id, payer_user_id, receiver_user_id, amount, category_id):
     """Record a payment/debt settlement between household members"""
     conn = get_database_connection()
     if conn:
         try:
             cursor = conn.cursor()
+            
+            # Get receiver username for transaction notes
+            cursor.execute("SELECT username FROM Users WHERE user_id = %s", (int(receiver_user_id),))
+            receiver_result = cursor.fetchone()
+            receiver_name = receiver_result[0] if receiver_result else "User"
+            
+            # Insert debt settlement record
             query = """
                 INSERT INTO DebtSettlements (household_id, payer_user_id, receiver_user_id, amount, status)
                 VALUES (%s, %s, %s, %s, 'settled')
             """
             cursor.execute(query, (int(household_id), int(payer_user_id), int(receiver_user_id), float(amount)))
+            
+            # Insert transaction record
+            transaction_query = """
+                INSERT INTO Transactions (household_id, user_id, category_id, amount, notes, is_shared)
+                VALUES (%s, %s, %s, %s, %s, TRUE)
+            """
+            transaction_notes = f"Payment to {receiver_name}"
+            cursor.execute(transaction_query, (int(household_id), int(payer_user_id), int(category_id), float(amount), transaction_notes))
+            
             conn.commit()
             cursor.close()
             return True
         except Exception as e:
             st.error(f"Error recording payment: {e}")
+            return False
+    return False
+
+def get_or_create_permanent_category(household_id, category_name, category_type):
+    """Get or create a permanent category (Bill or Contribution)"""
+    conn = get_database_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            # Check if category exists
+            cursor.execute("""
+                SELECT category_id FROM Categories 
+                WHERE household_id = %s AND name = %s AND type = %s
+            """, (int(household_id), category_name, category_type))
+            result = cursor.fetchone()
+            
+            if result:
+                category_id = result[0]
+            else:
+                # Create the permanent category
+                cursor.execute("""
+                    INSERT INTO Categories (household_id, name, type)
+                    VALUES (%s, %s, %s)
+                """, (int(household_id), category_name, category_type))
+                conn.commit()
+                category_id = cursor.lastrowid
+            
+            cursor.close()
+            return category_id
+        except Exception as e:
+            st.error(f"Error getting/creating category: {e}")
+            return None
+    return None
+
+@st.cache_data(ttl=60)
+def get_categories(household_id):
+    """Get all categories for a household"""
+    household_id = int(household_id)
+    conn = get_database_connection()
+    if conn:
+        query = """
+            SELECT category_id, name, type
+            FROM Categories
+            WHERE household_id = %s
+            ORDER BY type, name
+        """
+        df = pd.read_sql(query, conn, params=(household_id,))
+        return df
+    return pd.DataFrame()
+
+def create_category(household_id, name, category_type):
+    """Create a new category for a household"""
+    conn = get_database_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            query = """
+                INSERT INTO Categories (household_id, name, type)
+                VALUES (%s, %s, %s)
+            """
+            cursor.execute(query, (int(household_id), name, category_type))
+            conn.commit()
+            cursor.close()
+            return True
+        except Exception as e:
+            st.error(f"Error creating category: {e}")
+            return False
+    return False
+
+def delete_category(category_id, household_id):
+    """Delete a category from a household"""
+    conn = get_database_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            query = "DELETE FROM Categories WHERE category_id = %s AND household_id = %s"
+            cursor.execute(query, (int(category_id), int(household_id)))
+            conn.commit()
+            cursor.close()
+            return True
+        except Exception as e:
+            st.error(f"Error deleting category: {e}")
             return False
     return False
 
@@ -671,20 +818,21 @@ def delete_savings_goal(goal_id, household_id):
             return False
     return False
 
-def pay_towards_goal(goal_id, household_id, payment_amount):
+def pay_towards_goal(goal_id, household_id, payment_amount, user_id=None):
     """Add payment towards a savings goal, ensuring it doesn't exceed target"""
     conn = get_database_connection()
     if conn:
         try:
             cursor = conn.cursor()
-            # First get current and target amounts
-            select_query = "SELECT current_amount, target_amount FROM SavingsGoals WHERE goal_id = %s AND household_id = %s"
+            # First get current and target amounts, and goal name
+            select_query = "SELECT current_amount, target_amount, name FROM SavingsGoals WHERE goal_id = %s AND household_id = %s"
             cursor.execute(select_query, (int(goal_id), int(household_id)))
             result = cursor.fetchone()
             
             if result:
                 current_amount = float(result[0])
                 target_amount = float(result[1])
+                goal_name = result[2]
                 new_amount = current_amount + float(payment_amount)
                 
                 # Check if payment would exceed target
@@ -695,6 +843,21 @@ def pay_towards_goal(goal_id, household_id, payment_amount):
                 # Update the current amount
                 update_query = "UPDATE SavingsGoals SET current_amount = %s WHERE goal_id = %s AND household_id = %s"
                 cursor.execute(update_query, (new_amount, int(goal_id), int(household_id)))
+                
+                # If user_id is provided, create a transaction record
+                if user_id is not None:
+                    # Get or create permanent 'Contribution' category
+                    category_id = get_or_create_permanent_category(int(household_id), 'Contribution', 'goal')
+                    
+                    if category_id:
+                        # Insert transaction record
+                        transaction_query = """
+                            INSERT INTO Transactions (household_id, user_id, category_id, amount, notes, is_shared)
+                            VALUES (%s, %s, %s, %s, %s, TRUE)
+                        """
+                        transaction_notes = f"Contribution to {goal_name}"
+                        cursor.execute(transaction_query, (int(household_id), int(user_id), category_id, float(payment_amount), transaction_notes))
+                
                 conn.commit()
                 cursor.close()
                 return True, "Payment added successfully"
@@ -771,6 +934,13 @@ if 'show_edit_form' not in st.session_state:
 
 user_info = st.session_state.get('user_info', None) 
 household_info = st.session_state.get('household_info', None)
+
+# Helper function to check admin privileges
+def is_admin():
+    """Check if current user has admin or co-admin privileges"""
+    role = st.session_state.get('household_info', {}).get('role', 'member')
+    return role in ['admin', 'co-admin']
+
 # Toggle menu function
 def toggle_menu():
     st.session_state.show_menu = not st.session_state.show_menu
@@ -784,10 +954,19 @@ if st.sidebar.checkbox("🔧 Enable Master View (Demo)", value=st.session_state.
     st.session_state.show_master_view = True
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 👥 Switch User View")
-    st.sidebar.caption("Select an admin user to view their dashboard")
     
-    # Get all users
-    all_users = get_all_users()
+    # User type selection
+    user_type = st.sidebar.radio(
+        "Select User Type",
+        options=['admin', 'non-admin'],
+        index=0,
+        key="user_type_selector"
+    )
+    
+    st.sidebar.caption(f"Select a {user_type} user to view their dashboard")
+    
+    # Get users based on selected type
+    all_users = get_all_users(user_type)
     
     if not all_users.empty:
         # Create user selection dropdown
@@ -811,13 +990,18 @@ if st.sidebar.checkbox("🔧 Enable Master View (Demo)", value=st.session_state.
         selected_user_id = user_options[selected_user_label]
         if selected_user_id != st.session_state.user_id:
             st.session_state.user_id = selected_user_id
+            # Clear user and household info to force reload
+            if 'user_info' in st.session_state:
+                del st.session_state.user_info
+            if 'household_info' in st.session_state:
+                del st.session_state.household_info
             st.cache_data.clear()
             st.rerun()
         
         st.sidebar.markdown("---")
-        st.sidebar.info(f"Currently viewing: **{selected_user_label}**")
+        st.sidebar.info(f"Currently viewing: **{selected_user_label}** ({user_type})")
     else:
-        st.sidebar.warning("No users found in database")
+        st.sidebar.warning(f"No {user_type} users found in database")
 else:
     st.session_state.show_master_view = False
 
@@ -1043,7 +1227,7 @@ if view_mode == "My spending":
                 margin=dict(t=0, b=0, l=0, r=0),
                 annotations=[dict(text=f'${total_amount:.2f}', x=0.5, y=0.5, font_size=16, showarrow=False)]
             )
-            fig1.update_traces(textposition='inside', textinfo='percent+label')
+            fig1.update_traces(textposition='inside', textinfo='percent')
             st.plotly_chart(fig1, use_container_width=True)
         else:
             st.info("No spending data available for this period")
@@ -1065,7 +1249,7 @@ if view_mode == "My spending":
                 margin=dict(t=0, b=0, l=0, r=0),
                 annotations=[dict(text=f'${avg_amount:.2f}', x=0.5, y=0.5, font_size=16, showarrow=False)]
             )
-            fig2.update_traces(textposition='inside', textinfo='percent+label')
+            fig2.update_traces(textposition='inside', textinfo='percent')
             st.plotly_chart(fig2, use_container_width=True)
         else:
             st.info("No spending data available for this period")
@@ -1119,7 +1303,7 @@ else:
                 margin=dict(t=0, b=0, l=0, r=0),
                 annotations=[dict(text=f'${total_amount:.2f}', x=0.5, y=0.5, font_size=16, showarrow=False)]
             )
-            fig1.update_traces(textposition='inside', textinfo='percent+label')
+            fig1.update_traces(textposition='inside', textinfo='percent')
             st.plotly_chart(fig1, use_container_width=True)
         else:
             st.info("No spending data available for this period")
@@ -1141,7 +1325,7 @@ else:
                 margin=dict(t=0, b=0, l=0, r=0),
                 annotations=[dict(text=f'${avg_amount:.2f}', x=0.5, y=0.5, font_size=16, showarrow=False)]
             )
-            fig2.update_traces(textposition='inside', textinfo='percent+label')
+            fig2.update_traces(textposition='inside', textinfo='percent')
             st.plotly_chart(fig2, use_container_width=True)
         else:
             st.info("No spending data available for this period")
@@ -1169,7 +1353,7 @@ else:
                 height=300,
                 margin=dict(t=0, b=0, l=0, r=0)
             )
-            fig3.update_traces(textposition='inside', textinfo='percent+label')
+            fig3.update_traces(textposition='inside', textinfo='percent')
             st.plotly_chart(fig3, use_container_width=True)
         else:
             st.info("No spending comparison data available")
@@ -1187,6 +1371,7 @@ if st.button("💸 Make a Payment", key="toggle_payment"):
 
 if st.session_state.show_payment_form:
     household_members = get_household_members(household_info['household_id'])
+    categories_df = get_categories(household_info['household_id'])
     
     # Filter out current user from receiver options
     receiver_options = household_members[household_members['user_id'] != st.session_state.user_id]
@@ -1213,7 +1398,25 @@ if st.session_state.show_payment_form:
                     format="%.2f"
                 )
             
-            payment_note = st.text_input("Note (optional)", placeholder="e.g., Rent split, groceries reimbursement")
+            # Category selection (mandatory) - only show shared categories for user-to-user payments
+            if not categories_df.empty:
+                # Filter to only 'shared' type categories - exclude 'bill' and 'goal'
+                payment_categories = categories_df[categories_df['type'] == 'shared']
+                
+                if not payment_categories.empty:
+                    category_dict = dict(zip(payment_categories['name'], payment_categories['category_id']))
+                    selected_category = st.selectbox(
+                        "Category *",
+                        options=list(category_dict.keys()),
+                        help="Select the category for this payment"
+                    )
+                    selected_category_id = category_dict[selected_category]
+                else:
+                    st.error("No shared expense categories found. Please create a shared category first.")
+                    selected_category_id = None
+            else:
+                st.error("No categories found. Please create a category first.")
+                selected_category_id = None
             
             col_submit, col_cancel = st.columns(2)
             with col_submit:
@@ -1222,18 +1425,22 @@ if st.session_state.show_payment_form:
                 cancel_payment = st.form_submit_button("Cancel", use_container_width=True)
             
             if submit_payment:
-                receiver_id = receiver_dict[selected_receiver]
-                success = record_payment_to_user(
-                    household_info['household_id'],
-                    st.session_state.user_id,
-                    receiver_id,
-                    payment_amount
-                )
-                if success:
-                    st.success(f"Payment of ${payment_amount:.2f} to {selected_receiver} recorded!")
-                    st.session_state.show_payment_form = False
-                    get_user_debt_settlements.clear()
-                    st.rerun()
+                if selected_category_id is None:
+                    st.error("Please select a category.")
+                else:
+                    receiver_id = receiver_dict[selected_receiver]
+                    success = record_payment_to_user(
+                        household_info['household_id'],
+                        st.session_state.user_id,
+                        receiver_id,
+                        payment_amount,
+                        selected_category_id
+                    )
+                    if success:
+                        st.success(f"Payment of ${payment_amount:.2f} to {selected_receiver} recorded!")
+                        st.session_state.show_payment_form = False
+                        get_user_debt_settlements.clear()
+                        st.rerun()
             
             if cancel_payment:
                 st.session_state.show_payment_form = False
@@ -1350,12 +1557,15 @@ if not goals_df.empty:
 
                 # Show buttons - only show Pay button if goal not achieved
                 if goal_achieved:
-                    # Only show delete button when goal is achieved
-                    delete_clicked = st.button(
-                        "Delete",
-                        key=f"delete_goal_{goal_id}",
-                        use_container_width=True
-                    )
+                    # Only show delete button when goal is achieved (admin only)
+                    if is_admin():
+                        delete_clicked = st.button(
+                            "Delete",
+                            key=f"delete_goal_{goal_id}",
+                            use_container_width=True
+                        )
+                    else:
+                        delete_clicked = False
                     pay_clicked = False  # No payment option for achieved goals
                 else:
                     # Show both Pay and Delete buttons for active goals
@@ -1369,11 +1579,14 @@ if not goals_df.empty:
                         )
                     
                     with btn_col2:
-                        delete_clicked = st.button(
-                            "Delete",
-                            key=f"delete_goal_{goal_id}",
-                            use_container_width=True
-                        )
+                        if is_admin():
+                            delete_clicked = st.button(
+                                "Delete",
+                                key=f"delete_goal_{goal_id}",
+                                use_container_width=True
+                            )
+                        else:
+                            delete_clicked = False
                 
                 if pay_clicked:
                     st.session_state[f"show_payment_dialog_{goal_id}"] = True
@@ -1407,7 +1620,7 @@ if not goals_df.empty:
                         )
                     
                     if submit_payment and is_valid_amount:
-                        success, message = pay_towards_goal(goal_id, household_info["household_id"], payment_amount)
+                        success, message = pay_towards_goal(goal_id, household_info["household_id"], payment_amount, st.session_state.user_id)
                         if success:
                             st.success(message)
                             get_savings_goals.clear()
@@ -1435,14 +1648,17 @@ else:
 
 st.markdown("---")
 
-# Toggle button for creating new savings goal
+# Toggle button for creating new savings goal (admin only)
 if 'show_create_goal_form' not in st.session_state:
     st.session_state.show_create_goal_form = False
 
-if st.button("➕ Create New Savings Goal", key="toggle_create_goal"):
-    st.session_state.show_create_goal_form = not st.session_state.show_create_goal_form
+if is_admin():
+    if st.button("➕ Create New Savings Goal", key="toggle_create_goal"):
+        st.session_state.show_create_goal_form = not st.session_state.show_create_goal_form
+else:
+    st.info("Only admins and co-admins can create new savings goals")
 
-if st.session_state.show_create_goal_form:
+if st.session_state.show_create_goal_form and is_admin():
     st.markdown("### Create a new savings goal")
     
     with st.form("create_savings_goal"):
@@ -1536,14 +1752,17 @@ else:
 
 st.markdown("---")
 
-# Toggle button for creating new bill
+# Toggle button for creating new bill (admin only)
 if 'show_create_bill_form' not in st.session_state:
     st.session_state.show_create_bill_form = False
 
-if st.button("➕ Create New Bill", key="toggle_create_bill"):
-    st.session_state.show_create_bill_form = not st.session_state.show_create_bill_form
+if is_admin():
+    if st.button("➕ Create New Bill", key="toggle_create_bill"):
+        st.session_state.show_create_bill_form = not st.session_state.show_create_bill_form
+else:
+    st.info("Only admins and co-admins can create new bills")
 
-if st.session_state.show_create_bill_form:
+if st.session_state.show_create_bill_form and is_admin():
     st.markdown("### Create a new bill")
     
     with st.form("create_bill_form"):
@@ -1575,4 +1794,75 @@ if st.session_state.show_create_bill_form:
     if cancel_bill:
         st.session_state.show_create_bill_form = False
         st.rerun()
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# Category Management Section
+st.markdown('<h4 style="color: white;">Manage Categories</h4>', unsafe_allow_html=True)
+
+categories_df = get_categories(household_info['household_id'])
+
+# Display existing categories (only shared type)
+with st.expander("📁 View All Categories", expanded=False):
+    if not categories_df.empty:
+        # Filter to only show shared categories
+        shared_categories = categories_df[categories_df['type'] == 'shared']
+        
+        if not shared_categories.empty:
+            st.markdown(f"<span style='color: black; font-weight: bold;'>Shared Categories</span>", unsafe_allow_html=True)
+            for idx, row in shared_categories.iterrows():
+                col1, col2 = st.columns([4, 1])
+                with col1:
+                    st.markdown(f"<span style='color: black;'>• {row['name']}</span>", unsafe_allow_html=True)
+                with col2:
+                    if is_admin():
+                        if st.button("🗑️", key=f"delete_cat_{row['category_id']}", help="Delete category"):
+                            if delete_category(row['category_id'], household_info['household_id']):
+                                st.success(f"Deleted category: {row['name']}")
+                                get_categories.clear()
+                                st.rerun()
+        else:
+            st.info("No shared categories found for this household")
+    else:
+        st.info("No categories found for this household")
+
+# Toggle button for creating new category (admin only)
+if 'show_create_category_form' not in st.session_state:
+    st.session_state.show_create_category_form = False
+
+if is_admin():
+    if st.button("➕ Create New Category", key="toggle_create_category"):
+        st.session_state.show_create_category_form = not st.session_state.show_create_category_form
+else:
+    st.info("Only admins and co-admins can create new categories")
+
+if st.session_state.show_create_category_form and is_admin():
+    st.markdown("### Create a new shared category")
+    
+    with st.form("create_category_form"):
+        category_name = st.text_input("Category Name", placeholder="e.g. Groceries, Transportation, Entertainment")
+        st.caption("This category will be available for user-to-user payments and shared expenses")
+        
+        col_submit, col_cancel = st.columns(2)
+        with col_submit:
+            category_submitted = st.form_submit_button("Create Category", use_container_width=True)
+        with col_cancel:
+            cancel_category = st.form_submit_button("Cancel", use_container_width=True)
+    
+    if category_submitted:
+        if category_name:
+            # Always create as 'shared' type
+            success = create_category(household_info['household_id'], category_name, 'shared')
+            if success:
+                st.success(f"Shared category '{category_name}' created successfully!")
+                get_categories.clear()
+                st.session_state.show_create_category_form = False
+                st.rerun()
+        else:
+            st.warning("Please enter a category name.")
+    
+    if cancel_category:
+        st.session_state.show_create_category_form = False
+        st.rerun()
+
 
