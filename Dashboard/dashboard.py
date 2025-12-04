@@ -298,15 +298,10 @@ def get_all_users(user_type='admin'):
         else:
             view_name = 'adminusers'
         
-         # SELECT user_id, username
-            # FROM {view_name}
-            # ORDER BY user_id
         query = f"""
-            
-            SELECT u.user_id, u.username
-            FROM {view_name} u
-            JOIN HouseholdMembers hm ON u.user_id = hm.user_id
-            ORDER BY u.user_id
+            SELECT user_id, username
+            FROM {view_name}
+            ORDER BY user_id
         """
         df = pd.read_sql(query, conn)
         return df
@@ -555,20 +550,6 @@ def get_spending_data(household_id, user_id, period_days):
     if conn:
         # Total household spending by category
         # For Bill and Contribution, extract the specific name from notes
-
-        # SELECT 
-        #         CASE 
-        #             WHEN c.name = 'Bill' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(t.notes, ': ', -1), '\n', 1)
-        #             WHEN c.name = 'Contribution' THEN SUBSTRING_INDEX(SUBSTRING_INDEX(t.notes, 'to ', -1), '\n', 1)
-        #             ELSE c.name
-        #         END AS category,
-        #         SUM(t.amount) AS total
-        #     FROM Transactions t
-        #     JOIN Categories c ON t.category_id = c.category_id
-        #     WHERE t.household_id = %s 
-        #     AND t.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
-        #     GROUP BY category
-        #changed so that the query filters out users who are no longer members - CJ
         total_query = """
             SELECT 
                 CASE 
@@ -579,7 +560,6 @@ def get_spending_data(household_id, user_id, period_days):
                 SUM(t.amount) AS total
             FROM Transactions t
             JOIN Categories c ON t.category_id = c.category_id
-            JOIN HouseholdMembers hm ON t.user_id = hm.user_id AND t.household_id = hm.household_id
             WHERE t.household_id = %s 
             AND t.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
             GROUP BY category
@@ -587,24 +567,12 @@ def get_spending_data(household_id, user_id, period_days):
         total_df = pd.read_sql(total_query, conn, params=(household_id, period_days))
         
         # Average spending per user
-        # SELECT 
-        #         u.username,
-        #         AVG(t.amount) AS avg_amount
-        #     FROM Transactions t
-        #     JOIN Users u ON t.user_id = u.user_id
-        #     WHERE t.household_id = %s 
-        #     AND t.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
-        #     GROUP BY u.username
-        #     ORDER BY avg_amount DESC
-        #     LIMIT 5
-        #changed so that the query filters out users who are no longer members - CJ
         avg_query = """
             SELECT 
                 u.username,
                 AVG(t.amount) AS avg_amount
             FROM Transactions t
             JOIN Users u ON t.user_id = u.user_id
-            JOIN HouseholdMembers hm ON t.user_id = hm.user_id AND t.household_id = hm.household_id
             WHERE t.household_id = %s 
             AND t.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
             GROUP BY u.username
@@ -614,19 +582,11 @@ def get_spending_data(household_id, user_id, period_days):
         avg_df = pd.read_sql(avg_query, conn, params=(household_id, period_days))
         
         # User vs household spending
-        # SELECT 
-        #         SUM(CASE WHEN t.user_id = %s THEN t.amount ELSE 0 END) AS my_spending,
-        #         SUM(CASE WHEN t.user_id != %s THEN t.amount ELSE 0 END) AS household_spending
-        #     FROM Transactions t
-        #     WHERE t.household_id = %s 
-        #     AND t.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
-        #changed so that the query filters out users who are no longer members - CJ
         user_vs_household_query = """
             SELECT 
                 SUM(CASE WHEN t.user_id = %s THEN t.amount ELSE 0 END) AS my_spending,
                 SUM(CASE WHEN t.user_id != %s THEN t.amount ELSE 0 END) AS household_spending
             FROM Transactions t
-            JOIN HouseholdMembers hm ON t.user_id = hm.user_id AND t.household_id = hm.household_id
             WHERE t.household_id = %s 
             AND t.created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
         """
@@ -984,53 +944,8 @@ def pay_towards_goal(goal_id, household_id, payment_amount, user_id=None):
     return False, "Database connection failed"
 
 
-
-def leave_household(user_id, household_id) -> bool:
-    conn = get_database_connection()
-    if conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute("""
-            SELECT 
-                (SELECT role FROM HouseholdMembers WHERE user_id = %s AND household_id = %s) AS user_role,
-                (SELECT COUNT(*) FROM HouseholdMembers WHERE household_id = %s AND role = 'admin') AS admin_count
-        """, (int(user_id), int(household_id), int(household_id)))
-        
-            result = cursor.fetchone()
-            if result: 
-                user_role, admin_count = result
-                
-
-                if user_role == 'admin' and admin_count == 1:
-                    st.error("Cannot leave household: You are the **sole admin**. You must transfer admin rights or dissolve the household first.")
-                    cursor.close()
-                    return False
-            else:
-
-                st.error("Error verifying user role or household membership.")
-                cursor.close()
-                return False
-
-
-            query = """
-                DELETE FROM HouseholdMembers
-                WHERE user_id = %s AND household_id = %s
-            """
-            cursor.execute(query, (int(user_id), int(household_id)))
-            conn.commit()
-            return True
-
-        finally:
-            if cursor:
-                cursor.close()
-            
-    
-    return False
-
-    
 def update_user_name(new_username):
-    """update username for current user """
-    user_id_to_update = st.session_state.get('user_id') 
+    user_id_to_update = st.session_state.get('user_id') # Use .get for safety
     if not user_id_to_update:
         st.error("Error: User ID not found in session state.")
         print("Error: User ID not found in session state.")
@@ -1045,6 +960,9 @@ def update_user_name(new_username):
             cursor.execute(query, (new_username, user_id_int))
             conn.commit()
             cursor.close()
+            
+            # Update the session state here, so the new username persists 
+            # and is available on the next run.
             st.session_state.user_info['username'] = new_username
             
 
@@ -1075,10 +993,11 @@ if 'household_info' not in st.session_state:
         st.session_state.household_info = {
             'household_id': household_data['household_id'], 
             'name': household_data['name'],
+            # 🔥 CRUCIAL FIX: Ensure the 'role' is included here
             'role': household_data['role'] 
         }
     else:
-
+        # Handle case where household data is not found
         st.session_state.household_info = {'role': 'N/A', 'name': 'N/A', 'household_id': None}
 if 'show_menu' not in st.session_state:
     st.session_state.show_menu = False
@@ -1200,26 +1119,6 @@ def is_admin():
 # Toggle menu function
 def toggle_menu():
     st.session_state.show_menu = not st.session_state.show_menu
-
-#leave household helper funcs CJ
-def verify_household_membership(user_id):
-    """
-    check if the user is in a household
-        if not stop func
-        if yes return household info
-    """
-
-    household_info = st.session_state.get('household_info', {})
-
-    # If st ==empty, fetch from DB
-    if not household_info:
-        household_info = get_household_info(user_id)
-        # Save to session state if found
-        if household_info:
-            st.session_state['household_info'] = household_info
-
-
-    return household_info
 
 # Toggle master view function
 def toggle_master_view():
@@ -1343,43 +1242,20 @@ if master_view_enabled:
         st.sidebar.warning(f"No {user_type} users found in database")
 # Get user and household data
 
-if 'household_info' not in st.session_state or not st.session_state.household_info:
-    st.session_state.household_info = get_household_info(st.session_state.user_id)
-
-
-
-# check if user is not in any household
-if not household_info:
-    st.warning("This user is not part of any household.")
-    st.stop()
+# household_info = get_household_info(st.session_state.user_id)
+household_info = st.session_state.get('household_info', {})
 
 if user_info is None or household_info is None:
     st.error("Unable to load user or household information. Please check your database connection.")
     st.stop()
 
-def get_username_by_id(user_id):
-    conn = get_database_connection()
-    if conn:
-        try:
-            # Simple query to get username
-            df = pd.read_sql("SELECT username FROM Users WHERE user_id = %s", conn, params=(int(user_id),))
-            if not df.empty:
-                return df.iloc[0]['username']
-        finally:
-            # Pandas read_sql doesn't auto-close the connection object if passed directly, 
-            # but usually leaves it open. If you manage connections manually, handle close here.
-            pass
-    return "Unknown User"
-
-#header section dynamic updates - CJ, change the name in welcome back to the other user once a user has left 
+# Header Section
 col_header_left, col_header_right = st.columns([9, 3])
-current_view_id = st.session_state.user_id
-view_household_info = get_household_info(current_view_id) 
-view_username = get_username_by_id(current_view_id)
-household_name_display = view_household_info['name'] if view_household_info is not None else "No Household"
+
 with col_header_left:
-    st.markdown(f'<p class="welcome-text">Welcome back, {view_username}</p>', unsafe_allow_html=True)
-    st.markdown(f'<h1 class="homebase-name">{household_name_display}</h1>', unsafe_allow_html=True)
+
+    st.markdown(f'<p class="welcome-text">Welcome back, {user_info["username"]}</p>', unsafe_allow_html=True)
+    st.markdown(f'<h1 class="homebase-name">{household_info["name"]}</h1>', unsafe_allow_html=True)
 
 # UI create bill CJ
 @st.dialog("Add New Bill")
@@ -1415,9 +1291,14 @@ with col_header_right:
         with st.container():
             current_user_info = st.session_state.get('user_info', {})
             current_household_info = st.session_state.get('household_info', {})
-            col1, col2 = st.columns([3, 1])
-            with col1:
 
+            
+
+            col1, col2 = st.columns([3, 1])
+
+
+            with col1:
+    
                 st.markdown("""
                     <h3 class="account-header-container">Account Details</h3>
                 """, unsafe_allow_html=True)
@@ -1425,58 +1306,23 @@ with col_header_right:
             with col2:
                
                 if st.button("Edit", key="edit_account_btn"):
-                    st.session_state.show_edit_form = True            
+                    # Put the code that handles editing here
+                    st.session_state.show_edit_form = True # Example of using session state
+
+           
             st.write(f"Username: {current_user_info.get('username', 'N/A')}")
             st.write(f"Email: {current_user_info.get('email', 'N/A')}")
             st.write(f"Role: {current_household_info.get('role', 'N/A')}")
-            if current_household_info.get('role') != 'admin':
-                st.markdown("<br>", unsafe_allow_html=True) 
-                if st.button("Leave Household", use_container_width=True, key="leave_household_btn"):
-                    
-                    user_id = current_user_info.get('user_id') 
-                    household_id = current_household_info.get('household_id') 
-
-                    if user_id and household_id:
-
-                        if leave_household(user_id, household_id):
-                            st.success("You have successfully left the household")
-                            
-                            #clear household specific session state data
-                            if 'household_info' in st.session_state:
-                                del st.session_state['household_info']
-                            get_all_users.clear()
-                            current_type = st.session_state.get("user_type_selector", "admin")
-                            remaining_users = get_all_users(current_type)
-                            if not remaining_users.empty:
-                            #pick the first available user in the list
-                                new_user_row = remaining_users.iloc[0]
-                                new_user_id = new_user_row['user_id']
-                                new_username = new_user_row['username']
-                                
-                                #update the session state to the new user
-                                st.session_state.user_id = new_user_id
-                                st.toast(f"Switched view to user: {new_username}")
-                            else:
-                                st.warning("No other users found in this category.")
-                            st.session_state.show_menu = False
-
-                            st.rerun() 
-                        else:
-                            st.error("Failed to leave household. Check if you are the sole admin or if a database error occurred.")
-                    else:
-                        st.error("Error: Could not find required User ID or Household ID.")
-
-
             st.markdown("---")
             if st.button("🚪 Sign Out", use_container_width=True):
                 st.session_state.clear()
                 st.rerun()
-            # ""
+
             if st.session_state.show_edit_form:
-                st.markdown("<br>", unsafe_allow_html=True) 
+                st.markdown("<br>", unsafe_allow_html=True) # Add spacing
                 st.subheader("📝 Edit User Information")
 
-
+            # Use st.form to group inputs and handle submission cleanly
                 with st.form("edit_user_form", clear_on_submit=False):
                 
                 # Username Input
@@ -1485,7 +1331,11 @@ with col_header_right:
                         value=current_user_info['username'], # Pre-fill with current value
                     )
                     
-                
+                    # Password Input (Masked)
+                    new_password = st.text_input(
+                        "New Password", 
+                        type="password", # Important for hiding input
+                    )
                     
                     # Save and Cancel Buttons
                     col_save, col_cancel = st.columns(2)
@@ -1502,18 +1352,27 @@ with col_header_right:
                             else:
                                 st.error("Failed to update username in the database.")
                     
-                    
+                    # 2. Update Password Logic
+                        password_changed = bool(new_password)
+                        if password_changed:
+                            # **Call your backend/DB function to hash and update password here**
+                            st.success("Password successfully updated.")
                         
-
-                        if username_changed:
+                    # 3. Hide the form and Rerun if any changes occurred
+                        if username_changed or password_changed:
                             st.session_state.show_edit_form = False
-                            st.rerun() 
+                            st.rerun() # Essential to reflect changes and hide form
                         
-                   
+                    # with col_cancel:
+                    #     cancel_btn = st.button("Cancel", key="cancel_edit_btn")
+                    #     if cancel_btn:
+
+                    #         st.session_state.show_edit_form = False
+                    #         st.rerun() # Rerun to immediately hide the form
                 cancel_btn = st.button("Cancel", key="cancel_edit_btn_outside")
                 if cancel_btn:
                     st.session_state.show_edit_form = False
-                    st.rerun() 
+                    st.rerun() # Rerun to immediately hide the form
         
                         
             
@@ -1536,7 +1395,7 @@ def create_bill(household_id, name, amount, due_date):
             cursor.execute(query, (household_id, name, amount, due_date))
             conn.commit()
             cursor.close()
-
+            # conn.close()
             return True
         except Exception as e:
             st.error(f"Error creating bill: {e}")
