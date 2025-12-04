@@ -244,7 +244,7 @@ def get_database_connection():
            host="localhost",
            port=3306,
            user="root",
-           password="Rimal123!",
+           password="Crowbar522737",
            database="Homebase"
        )
        return connection
@@ -322,6 +322,8 @@ def create_user(username, email):
             conn.commit()
             new_id = cursor.lastrowid
             cursor.close()
+            # Clear cache so admin/non-admin views update
+            get_all_users.clear()
             return new_id
         except Exception as e:
             st.error(f"Error creating user: {e}")
@@ -985,20 +987,21 @@ if 'user_info' not in st.session_state:
     st.session_state.user_info = None
 
 if 'household_info' not in st.session_state:
-    st.session_state.household_info = None
-
-if 'household_info' not in st.session_state:
-    household_data = get_household_info(st.session_state.user_id)
-    if household_data is not None:
-        st.session_state.household_info = {
-            'household_id': household_data['household_id'], 
-            'name': household_data['name'],
-            # 🔥 CRUCIAL FIX: Ensure the 'role' is included here
-            'role': household_data['role'] 
-        }
+    # Only try to load household data if user_id is set
+    if st.session_state.user_id is not None:
+        household_data = get_household_info(st.session_state.user_id)
+        if household_data is not None:
+            st.session_state.household_info = {
+                'household_id': household_data['household_id'], 
+                'name': household_data['name'],
+                # 🔥 CRUCIAL FIX: Ensure the 'role' is included here
+                'role': household_data['role'] 
+            }
+        else:
+            # Handle case where household data is not found
+            st.session_state.household_info = None
     else:
-        # Handle case where household data is not found
-        st.session_state.household_info = {'role': 'N/A', 'name': 'N/A', 'household_id': None}
+        st.session_state.household_info = None
 if 'show_menu' not in st.session_state:
     st.session_state.show_menu = False
 if 'show_master_view' not in st.session_state:
@@ -1096,6 +1099,7 @@ def onboarding_screen():
             }
 
         # Save user info
+        st.session_state.user_id = new_user_id  # Set user_id in session state
         st.session_state.user_info = {
             "username": username,
             "email": email,
@@ -1242,10 +1246,12 @@ if master_view_enabled:
         st.sidebar.warning(f"No {user_type} users found in database")
 # Get user and household data
 
+# Refresh user_info and household_info after potential admin portal changes
+user_info = st.session_state.get('user_info', None)
 # household_info = get_household_info(st.session_state.user_id)
-household_info = st.session_state.get('household_info', {})
+household_info = st.session_state.get('household_info', None)
 
-if user_info is None or household_info is None:
+if user_info is None or household_info is None or household_info.get('household_id') is None:
     st.error("Unable to load user or household information. Please check your database connection.")
     st.stop()
 
@@ -1898,8 +1904,6 @@ if 'show_create_goal_form' not in st.session_state:
 if is_admin():
     if st.button("➕ Create New Savings Goal", key="toggle_create_goal"):
         st.session_state.show_create_goal_form = not st.session_state.show_create_goal_form
-else:
-    st.info("Only admins and co-admins can create new savings goals")
 
 if st.session_state.show_create_goal_form and is_admin():
     st.markdown("### Create a new savings goal")
@@ -2002,8 +2006,6 @@ if 'show_create_bill_form' not in st.session_state:
 if is_admin():
     if st.button("➕ Create New Bill", key="toggle_create_bill"):
         st.session_state.show_create_bill_form = not st.session_state.show_create_bill_form
-else:
-    st.info("Only admins and co-admins can create new bills")
 
 if st.session_state.show_create_bill_form and is_admin():
     st.markdown("### Create a new bill")
@@ -2076,8 +2078,6 @@ if 'show_create_category_form' not in st.session_state:
 if is_admin():
     if st.button("➕ Create New Category", key="toggle_create_category"):
         st.session_state.show_create_category_form = not st.session_state.show_create_category_form
-else:
-    st.info("Only admins and co-admins can create new categories")
 
 if st.session_state.show_create_category_form and is_admin():
     st.markdown("### Create a new shared category")

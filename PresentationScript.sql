@@ -26,3 +26,15 @@ JOIN households h
     ON b.household_id = h.household_id
 WHERE h.name = 'Alpha Theta Sorority House';
 
+select *
+from households;
+
+select * 
+from users
+where username = 'jerry';
+
+select * 
+from householdmembers hm
+join households h
+	on h.household_id = hm.household_id
+WHERE h.name = 'Alpha Theta Sorority House';
