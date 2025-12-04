@@ -8,7 +8,10 @@ __pycache__/
 
 # Ignore Everything
 homeBase/dashboard/.streamlit/secrets.toml
+homeBase/Homebase_SQL.sql
+homeBase/PresentationScript.sql
 **/python_test_connection.py
+
 
 # Exceptions:
 !dashboard.py
