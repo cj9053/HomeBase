@@ -238,20 +238,19 @@ st.markdown("""
 # Database connection 
 @st.cache_resource
 def get_database_connection():
-    """Establish connection to MySQL database using secrets"""
-    try:
-        connection = mysql.connector.connect(
-            host=st.secrets["mysql"]["host"],
-            port=st.secrets["mysql"]["port"],
-            user=st.secrets["mysql"]["user"],
-            password=st.secrets["mysql"]["password"],
-            database=st.secrets["mysql"]["database"]
-        )
-        return connection
-    except Exception as e:
-        st.error(f"Database connection failed: {e}")
-        return None
-
+   """Establish connection to MySQL database using direct credentials"""
+   try:
+       connection = mysql.connector.connect(
+           host="localhost",
+           port=3306,
+           user="root",
+           password="Rimal123!",
+           database="Homebase"
+       )
+       return connection
+   except Exception as e:
+       st.error(f"Database connection failed: {e}")
+       return None
 
 
 # Data fetching functions
@@ -307,6 +306,82 @@ def get_all_users(user_type='admin'):
         df = pd.read_sql(query, conn)
         return df
     return pd.DataFrame()
+
+# ============================================================
+# ONBOARDING DATABASE FUNCTIONS
+# ============================================================
+
+def create_user(username, email):
+    """Insert a new user into Users table."""
+    conn = get_database_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            query = "INSERT INTO Users (username, email) VALUES (%s, %s)"
+            cursor.execute(query, (username, email))
+            conn.commit()
+            new_id = cursor.lastrowid
+            cursor.close()
+            return new_id
+        except Exception as e:
+            st.error(f"Error creating user: {e}")
+    return None
+
+
+def create_household(household_name, admin_user_id):
+    """Create a new household and assign admin_user_id."""
+    conn = get_database_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            query = """
+                INSERT INTO Households (admin_user_id, name)
+                VALUES (%s, %s)
+            """
+            cursor.execute(query, (admin_user_id, household_name))
+            conn.commit()
+            new_household_id = cursor.lastrowid
+            cursor.close()
+            return new_household_id
+        except Exception as e:
+            st.error(f"Error creating household: {e}")
+    return None
+
+
+def add_member_to_household(household_id, user_id, role="member"):
+    """Add a user to HouseholdMembers table."""
+    conn = get_database_connection()
+    if conn:
+        try:
+            cursor = conn.cursor()
+            query = """
+                INSERT INTO HouseholdMembers (household_id, user_id, role)
+                VALUES (%s, %s, %s)
+            """
+            cursor.execute(query, (household_id, user_id, role))
+            conn.commit()
+            cursor.close()
+            return True
+        except Exception as e:
+            st.error(f"Error adding member: {e}")
+    return False
+
+
+@st.cache_data(ttl=300)
+def get_all_households():
+    """Get all households available."""
+    conn = get_database_connection()
+    if conn:
+        try:
+            df = pd.read_sql(
+                "SELECT household_id, name FROM Households ORDER BY name",
+                conn
+            )
+            return df
+        except:
+            return pd.DataFrame()
+    return pd.DataFrame()
+
 
 #check and uddate  Bill start CJ
 def check_and_update_overdue_bills(household_id):
@@ -904,17 +979,16 @@ def update_user_name(new_username):
 
 # Initialize session state
 if 'user_id' not in st.session_state:
-    st.session_state.user_id = 1  # Default user for demo
+    st.session_state.user_id = None  # start with no user
+
 if 'user_info' not in st.session_state:
-    user_info = get_user_info(st.session_state.user_id)
-    st.session_state.user_info = {
-        'username': user_info['username'], 
-        'email': user_info['email'],
-        'user_id': st.session_state.user_id
-    }
+    st.session_state.user_info = None
+
+if 'household_info' not in st.session_state:
+    st.session_state.household_info = None
+
 if 'household_info' not in st.session_state:
     household_data = get_household_info(st.session_state.user_id)
-    
     if household_data is not None:
         st.session_state.household_info = {
             'household_id': household_data['household_id'], 
@@ -931,6 +1005,107 @@ if 'show_master_view' not in st.session_state:
     st.session_state.show_master_view = False
 if 'show_edit_form' not in st.session_state:
     st.session_state.show_edit_form = False
+
+# ============================================================
+# ONBOARDING LOGIC + UI
+# ============================================================
+
+def user_has_household(user_id):
+    """Return household_id and role if user belongs to a household, otherwise None."""
+    conn = get_database_connection()
+    if conn:
+        try:
+            df = pd.read_sql(
+                """
+                SELECT household_id, role
+                FROM HouseholdMembers
+                WHERE user_id = %s
+                LIMIT 1
+                """,
+                conn,
+                params=(user_id,)
+            )
+            if df.empty:
+                return None
+            return df.iloc[0].to_dict()
+        except Exception as e:
+            st.error(f"Error checking household: {e}")
+    return None
+
+
+def onboarding_screen():
+    st.title("🏡 Welcome to Homebase")
+    st.write("Let's get your account set up!")
+
+    st.markdown("### 👤 Step 1 — Create your profile")
+    username = st.text_input("Your name")
+    email = st.text_input("Your email")
+
+    st.markdown("### 🏠 Step 2 — Choose how to join Homebase")
+    choice = st.radio(
+        "Select an option:",
+        ["Create a new household", "Join an existing household"]
+    )
+
+    selected_household = None
+    if choice == "Join an existing household":
+        households = get_all_households()
+        if households.empty:
+            st.info("No households exist yet. You must create one.")
+            choice = "Create a new household"
+        else:
+            mapping = dict(zip(households["name"], households["household_id"]))
+            selected_name = st.selectbox("Select a household", mapping.keys())
+            selected_household = mapping[selected_name]
+
+    if st.button("Continue"):
+        if not username or not email:
+            st.error("Enter both name and email.")
+            return
+
+        # Create new user
+        new_user_id = create_user(username, email)
+        if not new_user_id:
+            return
+
+        # Create or join household
+        if choice == "Create a new household":
+            household_name = f"{username}'s Household"
+            new_house_id = create_household(household_name, new_user_id)
+            add_member_to_household(new_house_id, new_user_id, role="admin")
+
+            st.session_state.household_info = {
+                "household_id": new_house_id,
+                "name": household_name,
+                "role": "admin"
+            }
+
+        else:
+            add_member_to_household(selected_household, new_user_id, role="member")
+
+            df = pd.read_sql(
+                "SELECT name FROM Households WHERE household_id = %s",
+                get_database_connection(),
+                params=(selected_household,)
+            )
+
+            st.session_state.household_info = {
+                "household_id": selected_household,
+                "name": df.iloc[0]["name"],
+                "role": "member"
+            }
+
+        # Save user info
+        st.session_state.user_info = {
+            "username": username,
+            "email": email,
+            "user_id": new_user_id
+        }
+
+        st.success("Setup complete! Loading your dashboard…")
+        st.rerun()
+
+
 
 user_info = st.session_state.get('user_info', None) 
 household_info = st.session_state.get('household_info', None)
@@ -949,62 +1124,122 @@ def toggle_menu():
 def toggle_master_view():
     st.session_state.show_master_view = not st.session_state.show_master_view
 
-# Master View Toggle (for demo purposes)
+
 if st.sidebar.checkbox("🔧 Enable Master View (Demo)", value=st.session_state.show_master_view, key="master_view_toggle"):
     st.session_state.show_master_view = True
+else:
+    st.session_state.show_master_view = False
+
+
+
+
+master_view_enabled = st.session_state.show_master_view
+user_info = st.session_state.get("user_info", None)
+household_info = st.session_state.get("household_info", None)
+
+if not master_view_enabled:
+
+    # Case 1: No profile created yet
+    if user_info is None:
+        onboarding_screen()
+        st.stop()
+
+    # Case 2: Profile exists but no household
+    if user_info is not None and household_info is None:
+        result = user_has_household(user_info["user_id"])
+        if result is None:
+            onboarding_screen()
+            st.stop()
+        else:
+            st.session_state.household_info = {
+                "household_id": result["household_id"],
+                "role": result["role"],
+                "name": None
+            }
+
+
+
+# ============================================================
+# MASTER VIEW MODE (ONLY WHEN ENABLED)
+# ============================================================
+
+if master_view_enabled:
+
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 👥 Switch User View")
-    
-    # User type selection
+
+    # Select admin/non-admin
     user_type = st.sidebar.radio(
         "Select User Type",
         options=['admin', 'non-admin'],
         index=0,
         key="user_type_selector"
     )
-    
+
     st.sidebar.caption(f"Select a {user_type} user to view their dashboard")
-    
-    # Get users based on selected type
+
+    # Load users
     all_users = get_all_users(user_type)
-    
+
     if not all_users.empty:
-        # Create user selection dropdown
-        user_options = {}
-        for idx, row in all_users.iterrows():
-            label = f"{row['username']}"
-            user_options[label] = row['user_id']
-        
-        # Find current user label
-        current_user_label = [label for label, uid in user_options.items() if uid == st.session_state.user_id]
-        current_index = list(user_options.keys()).index(current_user_label[0]) if current_user_label else 0
-        
+        # Build dropdown options
+        user_options = {row['username']: row['user_id'] for _, row in all_users.iterrows()}
+
         selected_user_label = st.sidebar.selectbox(
             "Select User",
             options=list(user_options.keys()),
-            index=current_index,
             key="user_selector"
         )
-        
-        # Update user_id if selection changed
-        selected_user_id = user_options[selected_user_label]
-        if selected_user_id != st.session_state.user_id:
-            st.session_state.user_id = selected_user_id
-            # Clear user and household info to force reload
-            if 'user_info' in st.session_state:
-                del st.session_state.user_info
-            if 'household_info' in st.session_state:
-                del st.session_state.household_info
-            st.cache_data.clear()
-            st.rerun()
-        
-        st.sidebar.markdown("---")
-        st.sidebar.info(f"Currently viewing: **{selected_user_label}** ({user_type})")
+
+        selected_user = selected_user_label
+
+        # ---------------------------------------------
+        # LOAD SELECTED USER CONTEXT INTO SESSION
+        # ---------------------------------------------
+        if selected_user:
+            conn = get_database_connection()
+            if conn:
+                # Load user info
+                df_user = pd.read_sql(
+                    "SELECT user_id, username, email FROM Users WHERE username = %s",
+                    conn,
+                    params=(selected_user,)
+                )
+
+                if not df_user.empty:
+                    st.session_state.user_id = int(df_user.iloc[0]["user_id"])
+                    st.session_state.user_info = {
+                        "user_id": int(df_user.iloc[0]["user_id"]),
+                        "username": df_user.iloc[0]["username"],
+                        "email": df_user.iloc[0]["email"]
+                    }
+
+                    # Load household info
+                    df_hh = pd.read_sql(
+                        """
+                        SELECT h.household_id, h.name, hm.role
+                        FROM HouseholdMembers hm
+                        JOIN Households h ON hm.household_id = h.household_id
+                        WHERE hm.user_id = %s
+                        """,
+                        conn,
+                        params=(st.session_state.user_id,)
+                    )
+
+                    if not df_hh.empty:
+                        st.session_state.household_info = {
+                            "household_id": int(df_hh.iloc[0]["household_id"]),
+                            "name": df_hh.iloc[0]["name"],
+                            "role": df_hh.iloc[0]["role"]
+                        }
+                    else:
+                        st.session_state.household_info = None
+
+                st.sidebar.markdown("---")
+                st.sidebar.info(f"Currently viewing: **{selected_user_label}** ({user_type})")
+
     else:
         st.sidebar.warning(f"No {user_type} users found in database")
-else:
-    st.session_state.show_master_view = False
-
 # Get user and household data
 
 # household_info = get_household_info(st.session_state.user_id)
@@ -1199,13 +1434,21 @@ period_days_map = {
 }
 period_days = period_days_map[period]
 
+current_user_id = st.session_state.get("user_id")
+current_household_id = household_info.get("household_id") if household_info else None
+
+if current_user_id is None or current_household_id is None:
+    st.info("Your profile is set up, but you are not yet linked to a household with spending data.")
+    st.stop()
+
 # Get spending data based on view mode
 if view_mode == "My spending":
     user_category_df, user_avg_category_df, cumulative_df = get_user_spending_data(
-        household_info['household_id'], 
-        st.session_state.user_id, 
+        current_household_id,
+        current_user_id,
         period_days
     )
+
     
     # Three Charts for My Spending View
     chart_col1, chart_col2, chart_col3 = st.columns(3)
@@ -1276,12 +1519,12 @@ if view_mode == "My spending":
             st.info("No spending data available for this period")
 
 else:
-    # Household spending view (original charts)
     total_spending_df, avg_spending_df, comparison_df = get_spending_data(
-        household_info['household_id'], 
-        st.session_state.user_id, 
+        current_household_id,
+        current_user_id,
         period_days
     )
+
     
     # Three Donut Charts Section (4 columns each in 12-point grid)
     chart_col1, chart_col2, chart_col3 = st.columns(3)
