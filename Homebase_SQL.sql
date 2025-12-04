@@ -26,7 +26,7 @@ CREATE TABLE Households (
 -- HOUSEHOLD MEMBERS
 CREATE TABLE HouseholdMembers (
     member_id INT AUTO_INCREMENT PRIMARY KEY,
-    household_id INT,
+    household_id INT NOT NULL,
     user_id INT NOT NULL,
     role ENUM('admin','co-admin','member') NOT NULL,
     FOREIGN KEY (household_id) REFERENCES Households(household_id),
