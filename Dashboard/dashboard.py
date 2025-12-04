@@ -469,6 +469,7 @@ def open_bill_action(bill_id, bill_name, amount):
             if success:
                 st.success("Bill paid")
                 get_upcoming_bills.clear() # Clear cache so it vanishes from list
+                get_recent_transactions.clear() # Clear cache to show new transaction
                 st.rerun()
 
 
@@ -1689,6 +1690,7 @@ if st.session_state.show_payment_form:
                         st.success(f"Payment of ${payment_amount:.2f} to {selected_receiver} recorded!")
                         st.session_state.show_payment_form = False
                         get_user_debt_settlements.clear()
+                        get_recent_transactions.clear() # Clear cache to show new transaction
                         st.rerun()
             
             if cancel_payment:
@@ -1873,6 +1875,7 @@ if not goals_df.empty:
                         if success:
                             st.success(message)
                             get_savings_goals.clear()
+                            get_recent_transactions.clear() # Clear cache to show new transaction
                             st.session_state[f"show_payment_dialog_{goal_id}"] = False
                             st.rerun()
                         else:
