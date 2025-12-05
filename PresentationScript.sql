@@ -1,12 +1,15 @@
 use homebase;
 
-# When debtsettlements change in Alpha Theta
+# When users are updated
 SELECT *
-FROM debtsettlements t
-JOIN households h
-    ON t.household_id = h.household_id
-WHERE h.name = 'Alpha Theta Sorority House';
+FROM users u;
 
+
+# When households are added 
+SELECT *
+FROM households h;
+
+# ---------------------------------------
 
 # When savings goals change in Alpha Theta
 SELECT *
@@ -31,17 +34,7 @@ JOIN households h
     ON c.household_id = h.household_id
 WHERE h.name = 'Alpha Theta Sorority House';
 
-# When Transactions are updated Alpha Theta
-SELECT *
-FROM transactions t
-JOIN households h
-    ON t.household_id = h.household_id
-WHERE h.name = 'Alpha Theta Sorority House';
-
-
-# When users are updated
-SELECT *
-FROM users u;
+# --------------------------------------------------
 
 # When household members are changed in Alpha Theta
 SELECT *
@@ -51,8 +44,19 @@ JOIN households h
 WHERE h.name = 'Alpha Theta Sorority House';
 
 
-# When households are added or deleted
+# When user-to-user payment change in Alpha Theta
 SELECT *
-FROM households h
+FROM debtsettlements t
+JOIN households h
+    ON t.household_id = h.household_id
+WHERE h.name = 'Alpha Theta Sorority House';
+
+
+# When Transactions are updated Alpha Theta
+SELECT *
+FROM transactions t
+JOIN households h
+    ON t.household_id = h.household_id
+WHERE h.name = 'Alpha Theta Sorority House';
 
 
